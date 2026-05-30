@@ -1,0 +1,8 @@
+---
+# Defaults for amt_fleet_power_policy role
+amt_fleet_parallel_limit: 10
+amt_fleet_continue_on_error: true
+amt_fleet_show_summary: true
+# amt_fleet_idle_timeout: 1  # Set in inventory or playbook
+# amt_fleet_link_policy: always_on  # Set in inventory or playbook
+# amt_fleet_wake_on_lan: true  # Set in inventory or playbook

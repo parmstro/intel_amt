@@ -1,24 +1,24 @@
 ---
 # Fleet status monitoring - aggregator pattern
 
-- name: Validate amt_fleet_targets
+- name: Validate amt_fleet
   ansible.builtin.assert:
     that:
-      - amt_fleet_targets is defined
-      - amt_fleet_targets | length > 0
-    fail_msg: "amt_fleet_targets must be defined and non-empty"
+      - amt_fleet is defined
+      - amt_fleet | length > 0
+    fail_msg: "amt_fleet must be defined and non-empty in inventory"
 
 - name: Query status from all fleet systems
   parmstro.intel_amt.amt_host_status:
-    host: "{{ item.value.host }}"
-    username: "{{ item.value.username }}"
-    password: "{{ item.value.password }}"
-    port: "{{ item.value.port | default(16992) }}"
-    use_tls: "{{ item.value.use_tls | default(false) }}"
-    verify_ssl: "{{ item.value.verify_ssl | default(false) }}"
-  loop: "{{ amt_fleet_targets | dict2items }}"
+    host: "{{ item.host }}"
+    username: "{{ item.username }}"
+    password: "{{ item.password }}"
+    port: "{{ item.port | default(16992) }}"
+    use_tls: "{{ item.use_tls | default(false) }}"
+    verify_ssl: "{{ item.verify_ssl | default(false) }}"
+  loop: "{{ amt_fleet }}"
   loop_control:
-    label: "{{ item.key }}"
+    label: "{{ item.name }}"
   register: amt_fleet_status_results
   ignore_errors: "{{ amt_fleet_continue_on_error }}"
   throttle: "{{ amt_fleet_parallel_limit }}"
@@ -52,15 +52,15 @@
   when: amt_fleet_show_details
   ansible.builtin.debug:
     msg:
-      - "System: {{ item.item.key }}"
-      - "  Host: {{ item.item.value.host }}"
+      - "System: {{ item.item.name }}"
+      - "  Host: {{ item.item.host }}"
       - "  Status: {{ 'REACHABLE ✅' if not item.failed else 'UNREACHABLE ❌' }}"
       - "  Power: {{ item.power_state | default('Unknown') | upper }}"
       - "  AMT Version: {{ item.amt_version | default('N/A') }}"
       - "  UUID: {{ item.system_uuid | default('N/A') }}"
   loop: "{{ amt_fleet_status_results.results }}"
   loop_control:
-    label: "{{ item.item.key }}"
+    label: "{{ item.item.name }}"
 
 - name: Display unreachable systems
   when:
@@ -69,7 +69,7 @@
   ansible.builtin.debug:
     msg:
       - "Unreachable systems:"
-      - "{{ amt_fleet_status_results.results | selectattr('failed', 'defined') | map(attribute='item.key') | list | join(', ') }}"
+      - "{{ amt_fleet_status_results.results | selectattr('failed', 'defined') | map(attribute='item.name') | list | join(', ') }}"
 
 - name: Get current timestamp
   when: amt_fleet_results_file is defined
@@ -98,15 +98,15 @@
       | System | Host | Status | Power | AMT Version | UUID |
       |--------|------|--------|-------|-------------|------|
       {% for result in amt_fleet_status_results.results %}
-      | {{ result.item.key }} | {{ result.item.value.host }} | {{ 'OK' if not result.failed else 'FAIL' }} | {{ result.power_state | default('N/A') }} | {{ result.amt_version | default('N/A') }} | {{ result.system_uuid | default('N/A') }} |
+      | {{ result.item.name }} | {{ result.item.host }} | {{ 'OK' if not result.failed else 'FAIL' }} | {{ result.power_state | default('N/A') }} | {{ result.amt_version | default('N/A') }} | {{ result.system_uuid | default('N/A') }} |
       {% endfor %}
 
       ## Unreachable Systems
       {% if amt_fleet_status_summary.unreachable | int > 0 %}
       {% for result in amt_fleet_status_results.results %}
       {% if result.failed %}
-      ### {{ result.item.key }}
-      - Host: {{ result.item.value.host }}
+      ### {{ result.item.name }}
+      - Host: {{ result.item.host }}
       - Error: {{ result.msg | default('Connection failed') }}
       {% endif %}
       {% endfor %}

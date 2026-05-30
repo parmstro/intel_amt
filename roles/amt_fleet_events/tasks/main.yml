@@ -1,0 +1,45 @@
+---
+# Fleet event log retrieval - aggregator pattern
+
+- name: Validate amt_fleet
+  ansible.builtin.assert:
+    that:
+      - amt_fleet is defined
+      - amt_fleet | length > 0
+    fail_msg: "amt_fleet must be defined in inventory"
+
+- name: Retrieve event logs from fleet
+  parmstro.intel_amt.amt_event_log:
+    host: "{{ item.host }}"
+    username: "{{ item.username }}"
+    password: "{{ item.password }}"
+    port: "{{ item.port | default(16992) }}"
+    use_tls: "{{ item.use_tls | default(false) }}"
+    verify_ssl: "{{ item.verify_ssl | default(false) }}"
+  loop: "{{ amt_fleet }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: amt_fleet_events_results
+  ignore_errors: "{{ amt_fleet_continue_on_error }}"
+  throttle: "{{ amt_fleet_parallel_limit }}"
+
+- name: Aggregate event results
+  ansible.builtin.set_fact:
+    amt_fleet_events_summary:
+      total: "{{ amt_fleet_events_results.results | length }}"
+      successful: "{{ amt_fleet_events_results.results | rejectattr('failed', 'defined') | list | length }}"
+      failed: "{{ amt_fleet_events_results.results | selectattr('failed', 'defined') | list | length }}"
+      total_events: "{{ amt_fleet_events_results.results | rejectattr('failed', 'defined') | map(attribute='events') | map('length') | sum }}"
+
+- name: Display events summary
+  when: amt_fleet_show_summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Fleet Event Log Summary"
+      - "=========================================="
+      - "Total systems: {{ amt_fleet_events_summary.total }}"
+      - "Successful: {{ amt_fleet_events_summary.successful }}"
+      - "Failed: {{ amt_fleet_events_summary.failed }}"
+      - "Total events retrieved: {{ amt_fleet_events_summary.total_events }}"
+      - "=========================================="

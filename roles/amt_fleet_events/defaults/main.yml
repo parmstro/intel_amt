@@ -1,0 +1,5 @@
+---
+# Defaults for amt_fleet_events role
+amt_fleet_parallel_limit: 10
+amt_fleet_continue_on_error: true
+amt_fleet_show_summary: true

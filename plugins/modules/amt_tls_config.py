@@ -570,7 +570,8 @@ def run_module():
         module.exit_json(**result)
 
     except Exception as e:
-        module.fail_json(msg=str(e), **result)
+        result["msg"] = str(e)
+    module.fail_json(**result)
 
 
 def main():

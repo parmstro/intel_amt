@@ -1,0 +1,202 @@
+---
+# Comprehensive test of ALL modules on ALL hosts
+- name: Test ALL AMT modules
+  hosts: management_node
+  gather_facts: false
+
+  tasks:
+    - name: Load vault credentials
+      ansible.builtin.include_vars:
+        dir: vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+      ignore_errors: true
+
+    - name: Verify credentials
+      ansible.builtin.assert:
+        that:
+          - amt_username is defined
+          - amt_password is defined
+
+    # TEST 1: amt_event_log
+    - name: "TEST 1: Query event logs from all hosts"
+      parmstro.intel_amt.amt_event_log:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: event_log_results
+      ignore_errors: true
+
+    - name: Display event log results
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ 'SUCCESS' if not item.failed else 'FAILED - ' + (item.msg | default('unknown')) }}"
+      loop: "{{ event_log_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # TEST 2: amt_host_status
+    - name: "TEST 2: Query host status from all hosts"
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: status_results
+      ignore_errors: true
+
+    - name: Display status results
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ 'SUCCESS - ' + (item.power_state | default('unknown')) if not item.failed else 'FAILED - ' + (item.msg | default('unknown')) }}"
+      loop: "{{ status_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # TEST 3: amt_power (query only, don't change)
+    - name: "TEST 3: Query power state from all hosts"
+      parmstro.intel_amt.amt_power:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        state: query
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: power_results
+      ignore_errors: true
+
+    - name: Display power results
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ 'SUCCESS - ' + (item.power_state | default('unknown')) if not item.failed else 'FAILED - ' + (item.msg | default('unknown')) }}"
+      loop: "{{ power_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # TEST 4: amt_system_settings (query only)
+    - name: "TEST 4: Query system settings from all hosts"
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        state: query
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: system_results
+      ignore_errors: true
+
+    - name: Display system settings results
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ 'SUCCESS - ' + (item.hostname | default('unknown')) if not item.failed else 'FAILED - ' + (item.msg | default('unknown')) }}"
+      loop: "{{ system_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # TEST 5: amt_power_policy (query only)
+    - name: "TEST 5: Query power policy from all hosts"
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        state: query
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: policy_results
+      ignore_errors: true
+
+    - name: Display power policy results
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ 'SUCCESS - idle=' + (item.idle_timeout | default('unknown') | string) if not item.failed else 'FAILED - ' + (item.msg | default('unknown')) }}"
+      loop: "{{ policy_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # TEST 6: amt_network_settings (query only)
+    - name: "TEST 6: Query network settings from all hosts"
+      parmstro.intel_amt.amt_network_settings:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        state: query
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: network_results
+      ignore_errors: true
+
+    - name: Display network settings results
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ 'SUCCESS - ' + (item.ip_address | default('unknown')) if not item.failed else 'FAILED - ' + (item.msg | default('unknown')) }}"
+      loop: "{{ network_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # TEST 7: amt_user (verify it's a stub)
+    - name: "TEST 7: Attempt password change (expect stub message)"
+      parmstro.intel_amt.amt_user:
+        host: "{{ amt_fleet[0].host }}"
+        username: "{{ amt_fleet[0].username }}"
+        password: "{{ amt_fleet[0].password }}"
+        port: "{{ amt_fleet[0].port }}"
+        use_tls: "{{ amt_fleet[0].use_tls }}"
+        target_user: admin
+        new_password: "TestPassword123!"
+        state: password_changed
+      register: user_result
+      ignore_errors: true
+
+    - name: Display user module result (should show stub message)
+      ansible.builtin.debug:
+        msg: "amt_user: {{ user_result.msg }}"
+
+    # TEST 8: amt_log_clear (on ONE host only)
+    - name: "TEST 8: Clear event log on c1s2n5 (least critical)"
+      parmstro.intel_amt.amt_log_clear:
+        host: "{{ amt_fleet[4].host }}"
+        username: "{{ amt_fleet[4].username }}"
+        password: "{{ amt_fleet[4].password }}"
+        port: "{{ amt_fleet[4].port }}"
+        use_tls: "{{ amt_fleet[4].use_tls }}"
+      register: clear_result
+      ignore_errors: true
+
+    - name: Display log clear result
+      ansible.builtin.debug:
+        msg: "amt_log_clear on c1s2n5: {{ 'SUCCESS' if not clear_result.failed else 'FAILED - ' + (clear_result.msg | default('unknown')) }}"
+
+    # SUMMARY
+    - name: Test Summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "COMPREHENSIVE MODULE TEST RESULTS"
+          - "============================================"
+          - "amt_event_log: {{ event_log_results.results | rejectattr('failed', 'defined') | list | length }}/{{ amt_fleet | length }} hosts"
+          - "amt_host_status: {{ status_results.results | rejectattr('failed', 'defined') | list | length }}/{{ amt_fleet | length }} hosts"
+          - "amt_power: {{ power_results.results | rejectattr('failed', 'defined') | list | length }}/{{ amt_fleet | length }} hosts"
+          - "amt_system_settings: {{ system_results.results | rejectattr('failed', 'defined') | list | length }}/{{ amt_fleet | length }} hosts"
+          - "amt_power_policy: {{ policy_results.results | rejectattr('failed', 'defined') | list | length }}/{{ amt_fleet | length }} hosts"
+          - "amt_network_settings: {{ network_results.results | rejectattr('failed', 'defined') | list | length }}/{{ amt_fleet | length }} hosts"
+          - "amt_user: {{ 'STUB (as expected)' if 'pending' in user_result.msg else 'UNEXPECTED' }}"
+          - "amt_log_clear: {{ 'SUCCESS' if not clear_result.failed else 'FAILED' }}"
+          - "============================================"

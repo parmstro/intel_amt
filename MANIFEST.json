@@ -1,0 +1,41 @@
+{
+ "collection_info": {
+  "namespace": "parmstro",
+  "name": "intel_amt",
+  "version": "1.0.0",
+  "authors": [
+   "parmstro <parmstro@github>"
+  ],
+  "readme": "README.md",
+  "tags": [
+   "infrastructure",
+   "baremetal",
+   "hardware",
+   "intel",
+   "amt",
+   "bmc",
+   "nuc",
+   "power_management",
+   "wsman",
+   "openshift"
+  ],
+  "description": "Intel Active Management Technology (AMT) management for Ansible. Power control, configuration, and provisioning for Intel NUC and AMT-enabled systems.",
+  "license": [
+   "GPL-3.0-or-later"
+  ],
+  "license_file": null,
+  "dependencies": {},
+  "repository": "https://github.com/parmstro/intel_amt",
+  "documentation": "https://github.com/parmstro/intel_amt/blob/main/README.md",
+  "homepage": "https://github.com/parmstro/intel_amt",
+  "issues": "https://github.com/parmstro/intel_amt/issues"
+ },
+ "file_manifest_file": {
+  "name": "FILES.json",
+  "ftype": "file",
+  "chksum_type": "sha256",
+  "chksum_sha256": "bb6ba63c2f8d1a5ad2796f2249666742a243501df34859b4fc051a2a3688c201",
+  "format": 1
+ },
+ "format": 1
+}

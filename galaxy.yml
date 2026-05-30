@@ -8,7 +8,7 @@ namespace: parmstro
 name: intel_amt
 
 # The version of the collection. Must be compatible with semantic versioning
-version: 1.0.0
+version: 1.0.1
 
 # The path to the Markdown (.md) readme file. This path is relative to the root of the collection
 readme: README.md
@@ -62,4 +62,15 @@ homepage: https://github.com/parmstro/intel_amt
 issues: https://github.com/parmstro/intel_amt/issues
 
 # Files to exclude from build
-build_ignore: []
+build_ignore:
+  - .git
+  - .gitignore
+  - .vault_password
+  - '*.tar.gz'
+  - vault
+  - development
+  - .claude
+  - Makefile
+  - test_*.yml
+  - tests
+  - playbooks/test_*.yml

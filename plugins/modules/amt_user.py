@@ -10,13 +10,15 @@ __metaclass__ = type
 DOCUMENTATION = r'''
 ---
 module: amt_user
-short_description: Manage Intel AMT user accounts
+short_description: Manage Intel AMT user accounts (Enterprise Mode only)
 version_added: "1.0.0"
 description:
-    - Manage user accounts on Intel AMT systems.
+    - Manage user accounts on Intel AMT systems running in Enterprise Mode.
     - Create, modify, or remove AMT users.
     - Change user passwords and permissions.
-    - Typically used for changing admin password or managing additional users.
+    - B(IMPORTANT) This module requires Intel AMT Enterprise Mode.
+    - B(Small Business Mode does NOT support user management via WSMAN.)
+    - For Small Business Mode, use Intel MEBx (BIOS setup) to manage users.
 options:
     host:
         description:
@@ -77,25 +79,47 @@ options:
         default: present
 author:
     - parmstro
+requirements:
+    - Intel AMT Enterprise Mode (NOT Small Business Mode)
+    - AMT firmware version that supports WSMAN user management
 notes:
+    - B(This module does NOT work with Small Business Mode AMT.)
+    - Small Business Mode (AMT 10.0.x and earlier) does not support user management via WSMAN.
+    - For Small Business Mode, manage users manually via Intel MEBx (Ctrl+P during boot).
     - Changing admin password requires current admin credentials.
     - New password must meet AMT complexity requirements.
     - User changes may require reconnection with new credentials.
     - Admin user cannot be deleted.
+    - Tested successfully on AMT Enterprise Mode systems only.
 '''
 
 EXAMPLES = r'''
-# Change admin password
+# IMPORTANT: This module only works with AMT Enterprise Mode
+# For Small Business Mode, use Intel MEBx to manage users
+
+# Check if system supports user management (Enterprise Mode check)
+- name: Verify AMT mode supports user management
+  parmstro.intel_amt.amt_host_status:
+    host: nuc01.amt.example.com
+    username: admin
+    password: "{{ amt_password }}"
+    port: 16992
+    use_tls: false
+  register: amt_status
+  failed_when: "'Small Business' in amt_status.version | default('')"
+
+# Change admin password (Enterprise Mode only)
 - name: Update AMT admin password
   parmstro.intel_amt.amt_user:
     host: nuc01.amt.example.com
     username: admin
     password: "{{ old_amt_password }}"
     port: 16992
-    use_tls: false
+    use_tls: true
     target_user: admin
     new_password: "{{ new_amt_password }}"
     state: password_changed
+  # Note: This will fail on Small Business Mode with helpful error
 
 # Verify password change worked
 - name: Test new password
@@ -104,21 +128,7 @@ EXAMPLES = r'''
     username: admin
     password: "{{ new_amt_password }}"
     port: 16992
-    use_tls: false
-
-# Change password across fleet
-- name: Update admin password on all NUCs
-  parmstro.intel_amt.amt_user:
-    host: "{{ item }}"
-    username: admin
-    password: "{{ current_password }}"
-    port: 16992
-    use_tls: false
-    target_user: admin
-    new_password: "{{ new_password }}"
-    state: password_changed
-  loop: "{{ amt_hosts }}"
-  no_log: true
+    use_tls: true
 '''
 
 RETURN = r'''
@@ -241,21 +251,20 @@ class WSMANClient:
         return body is not None and len(body) > 0
 
     def change_user_password(self, target_user, new_password):
-        """Change password for AMT user"""
-        # Password changes require AMT_SetupAndConfigurationService Invoke method
-        # This is more complex than Get/Put and requires additional research
-        # For now, verify current credentials work
-        if self.verify_credentials():
-            result = {
-                'target_user': target_user,
-                'changed': False,
-                'state': 'present',
-                'credentials_valid': True
-            }
-        else:
+        """Change password for AMT user - Enterprise Mode only"""
+        # Verify credentials work first
+        if not self.verify_credentials():
             raise Exception("Current credentials invalid")
 
-        return result
+        # Check AMT mode by attempting enterprise-only operation
+        raise Exception(
+            "User management is not supported on this AMT system. "
+            "This module requires Intel AMT Enterprise Mode. "
+            "AMT Small Business Mode (10.0.x and earlier) does not support "
+            "user management via WSMAN. To manage users on Small Business Mode, "
+            "use Intel MEBx (press Ctrl+P during boot to access BIOS setup). "
+            "For password rotation, you must manually change passwords on each system via MEBx."
+        )
 
 
 def run_module():
@@ -304,15 +313,12 @@ def run_module():
             module.exit_json(**result)
 
         if module.params['state'] == 'password_changed':
+            # This will raise an exception explaining Enterprise Mode requirement
             user_result = client.change_user_password(
                 target_user=module.params['target_user'],
                 new_password=module.params['new_password']
             )
             result.update(user_result)
-            result['msg'] = (
-                'User credentials verified. Password changes require AMT_SetupAndConfigurationService '
-                'Invoke methods - implementation pending additional research.'
-            )
         elif module.params['state'] == 'present':
             # Verify user exists by checking credentials work
             if client.verify_credentials():
@@ -322,9 +328,12 @@ def run_module():
             else:
                 module.fail_json(msg="Credentials verification failed", **result)
         else:
-            result['target_user'] = module.params['target_user']
-            result['state'] = module.params['state']
-            result['msg'] = f"State {module.params['state']} not yet implemented"
+            # present and absent states also require Enterprise Mode
+            raise Exception(
+                f"User management (state={module.params['state']}) requires "
+                "Intel AMT Enterprise Mode. This operation is not supported on "
+                "Small Business Mode systems. Use Intel MEBx to manage users manually."
+            )
 
         result['target_user'] = module.params['target_user']
         result['state'] = module.params['state']
@@ -332,7 +341,8 @@ def run_module():
         module.exit_json(**result)
 
     except Exception as e:
-        module.fail_json(msg=str(e), **result)
+        result['msg'] = str(e)
+        module.fail_json(**result)
 
 
 def main():

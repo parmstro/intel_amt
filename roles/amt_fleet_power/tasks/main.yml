@@ -1,44 +1,35 @@
 ---
 # Fleet power management - aggregator pattern
 
-- name: Validate amt_fleet_targets is defined
+- name: Validate amt_fleet
   ansible.builtin.assert:
     that:
-      - amt_fleet_targets is defined
-      - amt_fleet_targets | length > 0
-    fail_msg: "amt_fleet_targets must be defined and non-empty"
-    success_msg: "Fleet targets validated: {{ amt_fleet_targets | length }} systems"
+      - amt_fleet is defined
+      - amt_fleet | length > 0
+    fail_msg: "amt_fleet must be defined in inventory"
 
-- name: Display fleet operation plan
-  ansible.builtin.debug:
-    msg:
-      - "=========================================="
-      - "Intel AMT Fleet Power Management"
-      - "=========================================="
-      - "Operation: {{ amt_fleet_power_state }}"
-      - "Targets: {{ amt_fleet_targets | length }} systems"
-      - "Parallel limit: {{ amt_fleet_parallel_limit }}"
-      - "Continue on error: {{ amt_fleet_continue_on_error }}"
-      - "Systems: {{ amt_fleet_targets.keys() | list | join(', ') }}"
-      - "=========================================="
+- name: Validate required power operation state
+  ansible.builtin.assert:
+    that:
+      - amt_fleet_power_state is defined
+      - amt_fleet_power_state in ['on', 'off', 'cycle', 'reset', 'query']
+    fail_msg: "amt_fleet_power_state must be one of on, off, cycle, reset, query"
 
 - name: Execute power operation on fleet
   parmstro.intel_amt.amt_power:
-    host: "{{ item.value.host }}"
-    username: "{{ item.value.username }}"
-    password: "{{ item.value.password }}"
-    port: "{{ item.value.port | default(16992) }}"
-    use_tls: "{{ item.value.use_tls | default(false) }}"
-    verify_ssl: "{{ item.value.verify_ssl | default(false) }}"
+    host: "{{ item.host }}"
+    username: "{{ item.username }}"
+    password: "{{ item.password }}"
+    port: "{{ item.port | default(16992) }}"
+    use_tls: "{{ item.use_tls | default(false) }}"
+    verify_ssl: "{{ item.verify_ssl | default(false) }}"
     state: "{{ amt_fleet_power_state }}"
-  loop: "{{ amt_fleet_targets | dict2items }}"
+  loop: "{{ amt_fleet }}"
   loop_control:
-    label: "{{ item.key }}"
-    pause: "{{ amt_fleet_operation_delay }}"
+    label: "{{ item.name }}"
   register: amt_fleet_power_results
   ignore_errors: "{{ amt_fleet_continue_on_error }}"
   throttle: "{{ amt_fleet_parallel_limit }}"
-  no_log: false
 
 - name: Aggregate fleet results
   ansible.builtin.set_fact:
@@ -46,63 +37,9 @@
       total: "{{ amt_fleet_power_results.results | length }}"
       successful: "{{ amt_fleet_power_results.results | rejectattr('failed', 'defined') | list | length }}"
       failed: "{{ amt_fleet_power_results.results | selectattr('failed', 'defined') | list | length }}"
-      changed: "{{ amt_fleet_power_results.results | selectattr('changed', 'equalto', true) | list | length }}"
-      success_rate: "{{ ((amt_fleet_power_results.results | rejectattr('failed', 'defined') | list | length) / (amt_fleet_power_results.results | length) * 100) | round(1) }}"
 
 - name: Display fleet summary
   when: amt_fleet_show_summary
   ansible.builtin.debug:
     msg:
-      - "=========================================="
-      - "Fleet Power Management Summary"
-      - "=========================================="
-      - "Total systems: {{ amt_fleet_summary.total }}"
-      - "Successful: {{ amt_fleet_summary.successful }}"
-      - "Failed: {{ amt_fleet_summary.failed }}"
-      - "Changed: {{ amt_fleet_summary.changed }}"
-      - "Success rate: {{ amt_fleet_summary.success_rate }}%"
-      - "=========================================="
-
-- name: Display failed systems
-  when:
-    - amt_fleet_show_failures
-    - amt_fleet_summary.failed | int > 0
-  ansible.builtin.debug:
-    msg:
-      - "Failed systems:"
-      - "{{ amt_fleet_power_results.results | selectattr('failed', 'defined') | map(attribute='item.key') | list | join(', ') }}"
-
-- name: Create detailed results file
-  when: amt_fleet_results_file is defined
-  ansible.builtin.copy:
-    content: |
-      # AMT Fleet Power Management Results
-      # Generated: {{ ansible_date_time.iso8601 }}
-      # Operation: {{ amt_fleet_power_state }}
-
-      ## Summary
-      - Total: {{ amt_fleet_summary.total }}
-      - Successful: {{ amt_fleet_summary.successful }}
-      - Failed: {{ amt_fleet_summary.failed }}
-      - Success Rate: {{ amt_fleet_summary.success_rate }}%
-
-      ## Detailed Results
-      {% for result in amt_fleet_power_results.results %}
-      ### {{ result.item.key }}
-      - Host: {{ result.item.value.host }}
-      - Status: {{ 'SUCCESS ✅' if not result.failed else 'FAILED ❌' }}
-      - Power State: {{ result.power_state | default('Unknown') }}
-      {% if result.failed %}
-      - Error: {{ result.msg | default('Unknown error') }}
-      {% endif %}
-
-      {% endfor %}
-    dest: "{{ amt_fleet_results_file }}"
-    mode: '0644'
-
-- name: Fail if any systems failed and continue_on_error is false
-  when:
-    - not amt_fleet_continue_on_error
-    - amt_fleet_summary.failed | int > 0
-  ansible.builtin.fail:
-    msg: "{{ amt_fleet_summary.failed }} systems failed power operation"
+      - "Fleet Power: {{ amt_fleet_summary.successful }}/{{ amt_fleet_summary.total }} successful"

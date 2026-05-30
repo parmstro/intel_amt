@@ -1,0 +1,48 @@
+---
+# Fleet power policy configuration - aggregator pattern
+
+- name: Validate amt_fleet
+  ansible.builtin.assert:
+    that:
+      - amt_fleet is defined
+      - amt_fleet | length > 0
+    fail_msg: "amt_fleet must be defined in inventory"
+
+- name: Configure power policy on fleet
+  parmstro.intel_amt.amt_power_policy:
+    host: "{{ item.host }}"
+    username: "{{ item.username }}"
+    password: "{{ item.password }}"
+    port: "{{ item.port | default(16992) }}"
+    use_tls: "{{ item.use_tls | default(false) }}"
+    verify_ssl: "{{ item.verify_ssl | default(false) }}"
+    idle_timeout: "{{ amt_fleet_idle_timeout | default(omit) }}"
+    link_policy: "{{ amt_fleet_link_policy | default(omit) }}"
+    wake_on_lan: "{{ amt_fleet_wake_on_lan | default(omit) }}"
+  loop: "{{ amt_fleet }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: amt_fleet_policy_results
+  ignore_errors: "{{ amt_fleet_continue_on_error }}"
+  throttle: "{{ amt_fleet_parallel_limit }}"
+
+- name: Aggregate policy results
+  ansible.builtin.set_fact:
+    amt_fleet_policy_summary:
+      total: "{{ amt_fleet_policy_results.results | length }}"
+      successful: "{{ amt_fleet_policy_results.results | rejectattr('failed', 'defined') | list | length }}"
+      failed: "{{ amt_fleet_policy_results.results | selectattr('failed', 'defined') | list | length }}"
+      changed: "{{ amt_fleet_policy_results.results | selectattr('changed', 'equalto', true) | list | length }}"
+
+- name: Display policy summary
+  when: amt_fleet_show_summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Fleet Power Policy Summary"
+      - "=========================================="
+      - "Total systems: {{ amt_fleet_policy_summary.total }}"
+      - "Successful: {{ amt_fleet_policy_summary.successful }}"
+      - "Failed: {{ amt_fleet_policy_summary.failed }}"
+      - "Changed: {{ amt_fleet_policy_summary.changed }}"
+      - "=========================================="

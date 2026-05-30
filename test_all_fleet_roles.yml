@@ -1,0 +1,68 @@
+---
+# Test ALL fleet roles
+- name: Test ALL Fleet Roles
+  hosts: management_node
+  gather_facts: false
+
+  tasks:
+    - name: Load vault credentials
+      ansible.builtin.include_vars:
+        dir: vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+      ignore_errors: true
+
+    - name: Verify credentials
+      ansible.builtin.assert:
+        that:
+          - amt_username is defined
+          - amt_password is defined
+
+    - name: "ROLE TEST 1: amt_fleet_status"
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_status
+      register: fleet_status_test
+      ignore_errors: true
+
+    - name: Display fleet_status test result
+      ansible.builtin.debug:
+        msg: "amt_fleet_status: {{ 'PASS' if fleet_status_test.failed is not defined or not fleet_status_test.failed else 'FAIL' }}"
+
+    - name: "ROLE TEST 2: amt_fleet_power (query only)"
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_power
+      vars:
+        amt_fleet_power_state: query
+      register: fleet_power_test
+      ignore_errors: true
+
+    - name: Display fleet_power test result
+      ansible.builtin.debug:
+        msg: "amt_fleet_power: {{ 'PASS' if fleet_power_test.failed is not defined or not fleet_power_test.failed else 'FAIL' }}"
+
+    - name: "ROLE TEST 3: amt_fleet_configure (query only)"
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_configure
+      register: fleet_configure_test
+      ignore_errors: true
+
+    - name: Display fleet_configure test result
+      ansible.builtin.debug:
+        msg: "amt_fleet_configure: {{ 'PASS' if fleet_configure_test.failed is not defined or not fleet_configure_test.failed else 'FAIL' }}"
+
+    - name: Fleet roles test summary
+      ansible.builtin.debug:
+        msg:
+          - "============================================"
+          - "FLEET ROLES TEST RESULTS"
+          - "============================================"
+          - "amt_fleet_status: {{ 'PASS' if fleet_status_test.failed is not defined or not fleet_status_test.failed else 'FAIL' }}"
+          - "amt_fleet_power: {{ 'PASS' if fleet_power_test.failed is not defined or not fleet_power_test.failed else 'FAIL' }}"
+          - "amt_fleet_configure: {{ 'PASS' if fleet_configure_test.failed is not defined or not fleet_configure_test.failed else 'FAIL' }}"
+          - "============================================"
+          - "Note: amt_fleet_events and amt_fleet_power_policy roles exist"
+          - "      but were not tested in this run"
+          - "============================================"

@@ -60,7 +60,7 @@ amt_password: 'YourPasswordHere'
 amt_password: 'SecurePassword123!'
 
 # ❌ WRONG - NEVER DO THIS
-amt_password: '#Legend2013'  # Real password
+amt_password: 'MyRealPassword123'  # Using actual password as example
 ```
 
 ### Vault Pattern

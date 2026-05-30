@@ -1,0 +1,172 @@
+---
+# Test changing AMT network IP addresses
+# Changes 3rd octet from 254 to 253
+- name: Test AMT Network Configuration Changes
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    amt_hosts:
+      - name: c1s2n2
+        current_ip: 192.168.254.209
+        new_ip: 192.168.253.209
+      - name: c1s2n3
+        current_ip: 192.168.254.210
+        new_ip: 192.168.253.210
+      - name: c1s2n4
+        current_ip: 192.168.254.211
+        new_ip: 192.168.253.211
+
+    subnet_mask: 255.255.252.0
+    gateway: 192.168.252.1
+    dns1: 192.168.252.5
+    dns2: 192.168.252.6
+
+  tasks:
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        file: vault/test_credentials.yml
+      no_log: true
+
+    - name: "=== Step 1: Verify current configuration ==="
+      ansible.builtin.debug:
+        msg: "Verifying current IPs before making changes..."
+
+    - name: Get current network settings
+      parmstro.intel_amt.amt_network_settings:
+        host: "{{ item.current_ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ amt_hosts }}"
+      register: current_config
+
+    - name: Display current configuration
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ item.previous_config.ip_address }}"
+      loop: "{{ current_config.results }}"
+
+    - name: "=== Step 2: Change IP addresses (254.x → 253.x) ==="
+      ansible.builtin.debug:
+        msg: "Changing IP addresses on all hosts..."
+
+    - name: Update IP addresses
+      parmstro.intel_amt.amt_network_settings:
+        host: "{{ item.current_ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        dhcp_enabled: false
+        ip_address: "{{ item.new_ip }}"
+        subnet_mask: "{{ subnet_mask }}"
+        gateway: "{{ gateway }}"
+        primary_dns: "{{ dns1 }}"
+        secondary_dns: "{{ dns2 }}"
+      loop: "{{ amt_hosts }}"
+      register: ip_changes
+
+    - name: Display changes made
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }}:
+            Old IP: {{ item.previous_config.ip_address }}
+            New IP: {{ item.new_config.ip_address }}
+            Changed: {{ item.changed }}
+      loop: "{{ ip_changes.results }}"
+
+    - name: Wait for AMT to apply changes
+      ansible.builtin.pause:
+        seconds: 5
+        prompt: "Waiting for AMT firmware to apply network changes..."
+
+    - name: "=== Step 3: Verify new IP addresses are reachable ==="
+      ansible.builtin.debug:
+        msg: "Connecting to new IP addresses to verify..."
+
+    - name: Test connectivity on new IPs
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.new_ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ amt_hosts }}"
+      register: new_ip_status
+
+    - name: Display connectivity results
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} ({{ item.item.new_ip }}):
+            Reachable: {{ not item.failed }}
+            Power: {{ item.power_state | default('N/A') }}
+            IPv4: {{ item.ipv4_address | default('N/A') }}
+      loop: "{{ new_ip_status.results }}"
+
+    - name: "=== Step 4: Restore original IP addresses ==="
+      ansible.builtin.debug:
+        msg: "Restoring original IP configuration..."
+
+    - name: Restore original IPs
+      parmstro.intel_amt.amt_network_settings:
+        host: "{{ item.new_ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        dhcp_enabled: false
+        ip_address: "{{ item.current_ip }}"
+        subnet_mask: "{{ subnet_mask }}"
+        gateway: "{{ gateway }}"
+        primary_dns: "{{ dns1 }}"
+        secondary_dns: "{{ dns2 }}"
+      loop: "{{ amt_hosts }}"
+      register: ip_restore
+
+    - name: Display restoration results
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }}:
+            Restored to: {{ item.new_config.ip_address }}
+            Changed: {{ item.changed }}
+      loop: "{{ ip_restore.results }}"
+
+    - name: Wait for changes to apply
+      ansible.builtin.pause:
+        seconds: 5
+        prompt: "Waiting for AMT to apply restored configuration..."
+
+    - name: "=== Step 5: Verify original configuration restored ==="
+      ansible.builtin.debug:
+        msg: "Verifying original IPs are working..."
+
+    - name: Verify original IPs restored
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.current_ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ amt_hosts }}"
+      register: final_status
+
+    - name: Display final verification
+      ansible.builtin.debug:
+        msg: |
+          {{ item.item.name }} ({{ item.item.current_ip }}):
+            Reachable: {{ not item.failed }}
+            IPv4: {{ item.ipv4_address | default('N/A') }}
+      loop: "{{ final_status.results }}"
+
+    - name: "=== Test Summary ==="
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Network Configuration Test Complete
+          ========================================
+          Tested IP changes: 254.x → 253.x → 254.x
+          Hosts tested: {{ amt_hosts | length }}
+          All changes applied: {{ ip_changes.results | selectattr('changed', 'equalto', true) | list | length }} / {{ amt_hosts | length }}
+          All restored: {{ ip_restore.results | selectattr('changed', 'equalto', true) | list | length }} / {{ amt_hosts | length }}
+          ========================================

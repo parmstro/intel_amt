@@ -1,0 +1,65 @@
+### REQUIRED
+# The namespace of the collection. This can be a company/brand/organization or product namespace under which all
+# content lives. May only contain alphanumeric lowercase characters and underscores. Namespaces cannot start with
+# underscores or numbers and cannot contain consecutive underscores
+namespace: parmstro
+
+# The name of the collection. Has the same character restrictions as 'namespace'
+name: intel_amt
+
+# The version of the collection. Must be compatible with semantic versioning
+version: 1.0.0
+
+# The path to the Markdown (.md) readme file. This path is relative to the root of the collection
+readme: README.md
+
+# A list of the collection's content authors
+authors:
+  - parmstro <parmstro@github>
+
+# A short summary description of the collection
+description: >-
+  Intel Active Management Technology (AMT) management for Ansible.
+  Power control, configuration, and provisioning for Intel NUC
+  and AMT-enabled systems.
+
+# License
+license:
+  - GPL-3.0-or-later
+
+# License file path
+license_file: ''
+
+# Tags for indexing/searching
+tags:
+  - infrastructure
+  - baremetal
+  - hardware
+  - intel
+  - amt
+  - bmc
+  - nuc
+  - power_management
+  - wsman
+  - openshift
+
+# Collections that this collection requires to be installed for it to be usable. The key of the dict is the
+# collection label 'namespace.name'. The value is a version range
+# L(specifiers,https://python-semanticversion.readthedocs.io/en/latest/#requirement-specification). Multiple version
+# range specifiers can be set and are separated by ','
+dependencies: {}
+
+# The URL of the originating SCM repository
+repository: https://github.com/parmstro/intel_amt
+
+# The URL to any online docs
+documentation: https://github.com/parmstro/intel_amt/blob/main/README.md
+
+# The URL to the homepage of the collection/project
+homepage: https://github.com/parmstro/intel_amt
+
+# The URL to the collection issue tracker
+issues: https://github.com/parmstro/intel_amt/issues
+
+# Files to exclude from build
+build_ignore: []

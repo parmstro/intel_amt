@@ -1,0 +1,69 @@
+---
+# Power on entire AMT fleet
+# Runs on: management_node
+
+- name: Power On AMT Fleet
+  hosts: management_node
+  gather_facts: false
+
+  tasks:
+    - name: Load vault credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Display power-on plan
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT Fleet Power On"
+          - "=========================================="
+          - "Systems to power on: {{ amt_fleet | length }}"
+          - "Parallel limit: {{ amt_fleet_parallel_limit }}"
+          - "Delay between operations: {{ amt_fleet_operation_delay }}s"
+          - "=========================================="
+
+    - name: Power on each system
+      parmstro.intel_amt.amt_power:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        state: on
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+        pause: "{{ amt_fleet_operation_delay }}"
+      register: power_on_results
+      ignore_errors: "{{ amt_fleet_continue_on_error }}"
+      throttle: "{{ amt_fleet_parallel_limit }}"
+
+    - name: Aggregate results
+      ansible.builtin.set_fact:
+        power_on_summary:
+          total: "{{ amt_fleet | length }}"
+          successful: "{{ power_on_results.results | rejectattr('failed', 'defined') | list | length }}"
+          failed: "{{ power_on_results.results | selectattr('failed', 'defined') | list | length }}"
+          changed: "{{ power_on_results.results | selectattr('changed', 'equalto', true) | list | length }}"
+
+    - name: Display results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Power On Results"
+          - "=========================================="
+          - "Total: {{ power_on_summary.total }}"
+          - "Successful: {{ power_on_summary.successful }}"
+          - "Failed: {{ power_on_summary.failed }}"
+          - "Changed (powered on): {{ power_on_summary.changed }}"
+          - "=========================================="
+
+    - name: List failed systems
+      when: power_on_summary.failed | int > 0
+      ansible.builtin.debug:
+        msg: "Failed: {{ power_on_results.results | selectattr('failed', 'defined') | map(attribute='item.name') | list | join(', ') }}"

@@ -1,0 +1,45 @@
+---
+# Test network settings across the fleet
+- name: Test Network Settings on Fleet
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    amt_hosts:
+      - c1s2n2.amt.parmstrong.ca
+      - c1s2n3.amt.parmstrong.ca
+      - c1s2n4.amt.parmstrong.ca
+
+  tasks:
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        file: vault/test_credentials.yml
+      no_log: true
+
+    - name: Get network settings from all hosts
+      parmstro.intel_amt.amt_network_settings:
+        host: "{{ item }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ amt_hosts }}"
+      register: fleet_network
+      ignore_errors: true
+
+    - name: Display fleet network configuration
+      ansible.builtin.debug:
+        msg: |
+          Host: {{ item.item }}
+          {% if item.failed %}
+            ERROR: {{ item.msg }}
+          {% else %}
+            IPv4: {{ item.previous_config.ip_address | default('N/A') }}
+            Subnet: {{ item.previous_config.subnet_mask | default('N/A') }}
+            Gateway: {{ item.previous_config.gateway | default('N/A') }}
+            DHCP: {{ item.previous_config.dhcp_enabled | default('N/A') }}
+            DNS: {{ item.previous_config.primary_dns | default('N/A') }}, {{ item.previous_config.secondary_dns | default('N/A') }}
+            Ping: {{ item.previous_config.ping_response_enabled | default('N/A') }}
+            IPv6: {{ item.previous_config.ipv6_enabled | default('Disabled') }}
+          {% endif %}
+      loop: "{{ fleet_network.results }}"

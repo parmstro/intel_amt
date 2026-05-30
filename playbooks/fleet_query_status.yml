@@ -1,0 +1,83 @@
+---
+# Query status of entire AMT fleet
+# Runs on: management_node
+
+- name: Query AMT Fleet Status
+  hosts: management_node
+  gather_facts: false
+
+  tasks:
+    - name: Load vault credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+      ignore_errors: true  # Allow fallback to env vars
+
+    - name: Verify credentials are available
+      ansible.builtin.assert:
+        that:
+          - amt_username is defined
+          - amt_password is defined
+          - amt_username | length > 0
+          - amt_password | length > 0
+        fail_msg: |
+          ERROR: AMT credentials not found!
+
+          Option 1 - Vault file (recommended):
+            ansible-vault create vault/amt_credentials.yml --vault-password-file .vault_password
+
+            Add:
+              amt_username_vault: 'admin'
+              amt_password_vault: 'YourPasswordHere'
+
+          Option 2 - Environment variables (CI/CD):
+            export AMT_USERNAME="admin"
+            export AMT_PASSWORD="YourPasswordHere"
+        success_msg: "Credentials loaded successfully"
+
+    - name: Query each AMT system
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: fleet_status_results
+      ignore_errors: "{{ amt_fleet_continue_on_error }}"
+      throttle: "{{ amt_fleet_parallel_limit }}"
+
+    - name: Aggregate fleet status
+      ansible.builtin.set_fact:
+        fleet_summary:
+          total: "{{ amt_fleet | length }}"
+          reachable: "{{ fleet_status_results.results | rejectattr('failed', 'defined') | list | length }}"
+          unreachable: "{{ fleet_status_results.results | selectattr('failed', 'defined') | list | length }}"
+          powered_on: "{{ fleet_status_results.results | rejectattr('failed', 'defined') | selectattr('power_state', 'equalto', 'on') | list | length }}"
+          powered_off: "{{ fleet_status_results.results | rejectattr('failed', 'defined') | selectattr('power_state', 'equalto', 'off') | list | length }}"
+
+    - name: Display fleet status
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT Fleet Status"
+          - "=========================================="
+          - "Total systems: {{ fleet_summary.total }}"
+          - "Reachable: {{ fleet_summary.reachable }}"
+          - "Unreachable: {{ fleet_summary.unreachable }}"
+          - "Powered ON: {{ fleet_summary.powered_on }}"
+          - "Powered OFF: {{ fleet_summary.powered_off }}"
+          - "=========================================="
+
+    - name: Display system details
+      ansible.builtin.debug:
+        msg: "{{ item.item.name }}: {{ item.power_state | default('UNREACHABLE') }} ({{ item.item.host }})"
+      loop: "{{ fleet_status_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

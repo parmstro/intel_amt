@@ -1,0 +1,38 @@
+---
+# Playbook to collect status from entire NUC fleet
+- name: Collect AMT Status from Fleet
+  hosts: nucs
+  gather_facts: false
+  serial: 10
+
+  vars_prompt:
+    - name: amt_password
+      prompt: "Enter AMT password"
+      private: true
+
+  tasks:
+    - name: Get system status
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: "{{ amt_port | default(16992) }}"
+        use_tls: "{{ amt_use_tls | default(false) }}"
+      register: amt_status
+      ignore_errors: true
+
+    - name: Display status
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}:
+            System: {{ amt_status.system_name | default('ERROR') }}
+            State: {{ amt_status.enabled_state_text | default('N/A') }}
+            BIOS: {{ amt_status.bios_version | default('N/A') }}
+
+- name: Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Generate summary report
+      ansible.builtin.debug:
+        msg: "Fleet status collection complete. Check output above."

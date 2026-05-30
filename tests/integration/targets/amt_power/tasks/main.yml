@@ -1,0 +1,110 @@
+---
+# Integration tests for amt_power module
+- name: Load encrypted credentials from vault directory
+  include_vars:
+    dir: ../../../../vault
+    ignore_unknown_extensions: true
+
+- name: Set test facts
+  set_fact:
+    test_host: "{{ amt_test_host | default('c1s2n2.amt.parmstrong.ca') }}"
+    test_user: "{{ amt_test_user | default('admin') }}"
+    test_pass: "{{ amt_test_password }}"  # From vault.yml
+    test_port: "{{ amt_test_port | default(16992) }}"
+    test_tls: "{{ amt_test_tls | default(false) }}"
+
+- name: Test 1 - Query power state
+  parmstro.intel_amt.amt_power:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "{{ test_pass }}"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+    state: query
+  register: query_result
+
+- name: Verify query succeeded
+  assert:
+    that:
+      - query_result is not failed
+      - query_result.changed == false
+      - query_result.msg is defined
+
+- name: Test 2 - Check mode (reboot)
+  parmstro.intel_amt.amt_power:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "{{ test_pass }}"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+    state: reboot
+  check_mode: true
+  register: check_result
+
+- name: Verify check mode worked
+  assert:
+    that:
+      - check_result is not failed
+      - check_result.changed == true
+      - "'Would change' in check_result.msg"
+
+- name: Test 3 - Invalid state (should fail)
+  parmstro.intel_amt.amt_power:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "{{ test_pass }}"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+    state: invalid_state
+  register: invalid_result
+  ignore_errors: true
+
+- name: Verify invalid state failed
+  assert:
+    that:
+      - invalid_result is failed
+
+- name: Test 4 - Wrong password (should fail)
+  parmstro.intel_amt.amt_power:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "wrongpassword"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+    state: query
+  register: wrong_pass_result
+  ignore_errors: true
+
+- name: Verify wrong password failed
+  assert:
+    that:
+      - wrong_pass_result is failed
+
+# Only run destructive tests if explicitly enabled
+- name: Test 5 - Actual reboot (requires AMT_DESTRUCTIVE_TESTS=true)
+  block:
+    - name: Reboot system
+      parmstro.intel_amt.amt_power:
+        host: "{{ test_host }}"
+        username: "{{ test_user }}"
+        password: "{{ test_pass }}"
+        port: "{{ test_port }}"
+        use_tls: "{{ test_tls }}"
+        state: reboot
+      register: reboot_result
+
+    - name: Verify reboot command succeeded
+      assert:
+        that:
+          - reboot_result is not failed
+          - reboot_result.changed == true
+          - reboot_result.power_state == 'reboot'
+
+    - name: Wait for system to come back
+      wait_for:
+        host: "{{ test_host }}"
+        port: "{{ test_port }}"
+        delay: 10
+        timeout: 120
+
+  when: lookup('env', 'AMT_DESTRUCTIVE_TESTS') == 'true'

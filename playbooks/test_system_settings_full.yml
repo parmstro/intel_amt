@@ -1,0 +1,97 @@
+---
+# Test amt_system_settings with full WSMAN implementation
+
+- name: Test AMT System Settings Module
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_host: "192.168.254.209"  # c1s2n2
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Query current settings
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      register: current_settings
+
+    - name: Display current settings
+      ansible.builtin.debug:
+        msg:
+          - "Current System Settings:"
+          - "  Hostname: {{ current_settings.system_name }}"
+          - "  Domain: {{ current_settings.domain_name }}"
+          - "  FQDN: {{ current_settings.fqdn }}"
+          - "  Changed: {{ current_settings.changed }}"
+
+    - name: Test hostname change
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        system_name: c1s2n2-test
+      register: test_change
+
+    - name: Display test change result
+      ansible.builtin.debug:
+        msg:
+          - "Test Change Result:"
+          - "  Hostname: {{ test_change.system_name }}"
+          - "  Domain: {{ test_change.domain_name }}"
+          - "  FQDN: {{ test_change.fqdn }}"
+          - "  Changed: {{ test_change.changed }}"
+          - "  Message: {{ test_change.msg }}"
+
+    - name: Restore original hostname
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        system_name: c1s2n2
+      register: restore
+
+    - name: Display restore result
+      ansible.builtin.debug:
+        msg:
+          - "Restore Result:"
+          - "  Hostname: {{ restore.system_name }}"
+          - "  Domain: {{ restore.domain_name }}"
+          - "  FQDN: {{ restore.fqdn }}"
+          - "  Changed: {{ restore.changed }}"
+          - "  Message: {{ restore.msg }}"
+
+    - name: Final verification (should show no changes)
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        system_name: c1s2n2
+        domain_name: amt.parmstrong.ca
+      register: verify
+
+    - name: Display verification (should be unchanged)
+      ansible.builtin.debug:
+        msg:
+          - "Verification (should be unchanged):"
+          - "  Hostname: {{ verify.system_name }}"
+          - "  Domain: {{ verify.domain_name }}"
+          - "  FQDN: {{ verify.fqdn }}"
+          - "  Changed: {{ verify.changed }}"
+          - "  Message: {{ verify.msg }}"

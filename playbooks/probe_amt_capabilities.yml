@@ -1,0 +1,115 @@
+---
+# Probe AMT capabilities to determine what's actually supported
+# Specifically checking TLS/HTTPS capabilities on AMT 10.0.56
+
+- name: Probe AMT TLS Capabilities
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_amt_host: "{{ test_amt_host | default('192.168.254.200') }}"
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Test HTTP port 16992 (should work)
+      ansible.builtin.wait_for:
+        host: "{{ test_amt_host }}"
+        port: 16992
+        timeout: 5
+      register: http_port
+      ignore_errors: true
+
+    - name: Test HTTPS port 16993
+      ansible.builtin.wait_for:
+        host: "{{ test_amt_host }}"
+        port: 16993
+        timeout: 5
+      register: https_port
+      ignore_errors: true
+
+    - name: Test alternative HTTPS port 664
+      ansible.builtin.wait_for:
+        host: "{{ test_amt_host }}"
+        port: 664
+        timeout: 5
+      register: alt_https_port
+      ignore_errors: true
+
+    - name: Display port status
+      ansible.builtin.debug:
+        msg:
+          - "Port Status:"
+          - "  16992 (HTTP):  {{ 'OPEN ✅' if http_port is succeeded else 'CLOSED ❌' }}"
+          - "  16993 (HTTPS): {{ 'OPEN ✅' if https_port is succeeded else 'CLOSED ❌' }}"
+          - "  664 (Alt HTTPS): {{ 'OPEN ✅' if alt_https_port is succeeded else 'CLOSED ❌' }}"
+
+    - name: Get detailed AMT info via HTTP
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      register: amt_info
+
+    - name: Display AMT information
+      ansible.builtin.debug:
+        msg:
+          - "AMT System Information:"
+          - "  BIOS Version: {{ amt_info.bios_version }}"
+          - "  IPv4 Address: {{ amt_info.ipv4_address }}"
+          - "  MAC Address: {{ amt_info.mac_address }}"
+          - "  Power State: {{ amt_info.power_state }}"
+
+    - name: Check if AMT web interface responds via HTTP
+      ansible.builtin.uri:
+        url: "http://{{ test_amt_host }}:16992/"
+        method: GET
+        user: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        force_basic_auth: yes
+        validate_certs: no
+        timeout: 10
+      register: web_http
+      ignore_errors: true
+
+    - name: Display web interface status
+      ansible.builtin.debug:
+        msg:
+          - "AMT Web Interface (HTTP): {{ 'Accessible ✅' if web_http is succeeded else 'Not accessible ❌' }}"
+          - "{% if web_http is succeeded %}Status Code: {{ web_http.status }}{% endif %}"
+
+    - name: Final analysis
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT 10.0.56 TLS Capability Analysis"
+          - "=========================================="
+          - ""
+          - "System: {{ test_amt_host }}"
+          - "BIOS: {{ amt_info.bios_version }}"
+          - ""
+          - "Port Availability:"
+          - "  ✅ HTTP Port 16992: Available"
+          - "  {{ 'OPEN' if https_port is succeeded else '❌ HTTPS Port 16993: NOT AVAILABLE' }}"
+          - ""
+          - "{% if https_port is not succeeded %}CONCLUSION:{% endif %}"
+          - "{% if https_port is not succeeded %}  AMT 10.0.56 on Intel NUC5i5MYBE does not appear to support HTTPS.{% endif %}"
+          - "{% if https_port is not succeeded %}  Port 16993 is closed/not listening.{% endif %}"
+          - "{% if https_port is not succeeded %}  No TLS PKI menu found in MEBx.{% endif %}"
+          - "{% if https_port is not succeeded %}  This is likely a firmware/hardware limitation.{% endif %}"
+          - ""
+          - "{% if https_port is not succeeded %}IMPLICATIONS:{% endif %}"
+          - "{% if https_port is not succeeded %}  - HTTPS not available on this AMT version{% endif %}"
+          - "{% if https_port is not succeeded %}  - amt_tls_config module cannot enable HTTPS{% endif %}"
+          - "{% if https_port is not succeeded %}  - Fleet must use HTTP (port 16992) for management{% endif %}"
+          - "{% if https_port is not succeeded %}  - Consider network isolation for security{% endif %}"
+          - ""
+          - "=========================================="

@@ -1,0 +1,299 @@
+---
+# Secure Intel AMT fleet with HTTPS using Red Hat IPA certificates
+#
+# This playbook demonstrates the complete workflow for securing AMT management
+# interfaces with TLS certificates from Red Hat Identity Management (IPA).
+#
+# Prerequisites:
+#   - Red Hat Enterprise Linux with IPA client installed
+#   - System enrolled in IPA domain
+#   - AMT systems accessible via HTTP (port 16992)
+#   - Valid AMT admin credentials in vault
+#
+# Usage:
+#   ansible-playbook -i inventory playbooks/secure_amt_with_ipa.yml --vault-password-file .vault_password
+
+- name: Secure Intel AMT Fleet with IPA Certificates
+  hosts: localhost
+  gather_facts: true
+  vars:
+    amt_domain: amt.parmstrong.ca
+    ipa_realm: PARMSTRONG.CA
+    cert_base_path: /var/lib/certmonger/amt
+
+    # NUC fleet configuration
+    nuc_fleet:
+      - { chassis: 1, slot: 1, node: 1 }
+      - { chassis: 1, slot: 1, node: 2 }
+      - { chassis: 1, slot: 2, node: 1 }
+      - { chassis: 1, slot: 2, node: 2 }
+      # Add more as needed
+
+  tasks:
+    # =========================================================================
+    # Phase 1: Pre-flight Checks
+    # =========================================================================
+
+    - name: Verify IPA client is installed
+      ansible.builtin.command:
+        cmd: ipa-getcert --version
+      register: ipa_version
+      changed_when: false
+      failed_when: ipa_version.rc != 0
+
+    - name: Display IPA certmonger version
+      ansible.builtin.debug:
+        msg: "Using certmonger version: {{ ipa_version.stdout }}"
+
+    - name: Load vaulted AMT credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Create certificate storage directory
+      ansible.builtin.file:
+        path: "{{ cert_base_path }}"
+        state: directory
+        mode: '0755'
+        owner: root
+        group: root
+
+    - name: Build AMT host list
+      ansible.builtin.set_fact:
+        amt_hosts: "{{ amt_hosts | default([]) + [item] }}"
+      loop: "{{ nuc_fleet }}"
+      vars:
+        item:
+          hostname: "c{{ '%d' | format(item.chassis) }}s{{ '%d' | format(item.slot) }}n{{ '%d' | format(item.node) }}.{{ amt_domain }}"
+          nickname: "amt-c{{ '%d' | format(item.chassis) }}s{{ '%d' | format(item.slot) }}n{{ '%d' | format(item.node) }}"
+          chassis: "{{ item.chassis }}"
+          slot: "{{ item.slot }}"
+          node: "{{ item.node }}"
+
+    # =========================================================================
+    # Phase 2: Verify Current State (HTTP)
+    # =========================================================================
+
+    - name: Check current AMT status via HTTP
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.hostname }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ amt_hosts }}"
+      register: pre_status
+      ignore_errors: true
+
+    - name: Display systems currently accessible
+      ansible.builtin.debug:
+        msg: "{{ pre_status.results | selectattr('failed', 'equalto', false) | map(attribute='item.hostname') | list }}"
+
+    - name: Report any inaccessible systems
+      ansible.builtin.debug:
+        msg: "WARNING: Cannot reach {{ item.item.hostname }}"
+      loop: "{{ pre_status.results }}"
+      when: item.failed | default(false)
+      loop_control:
+        label: "{{ item.item.hostname }}"
+
+    # =========================================================================
+    # Phase 3: Request Certificates from IPA
+    # =========================================================================
+
+    - name: Request certificates from IPA and enable HTTPS
+      parmstro.intel_amt.amt_tls_config:
+        host: "{{ item.hostname }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16992
+        use_tls: false
+        tls_enabled: true
+        certmonger_request: true
+        certmonger_nickname: "{{ item.nickname }}"
+        certmonger_subject: "CN={{ item.hostname }}"
+        certmonger_principal: "host/{{ item.hostname }}@{{ ipa_realm }}"
+        certificate_path: "{{ cert_base_path }}/{{ item.nickname }}.crt"
+        private_key_path: "{{ cert_base_path }}/{{ item.nickname }}.key"
+      loop: "{{ amt_hosts }}"
+      register: tls_config
+      async: 300
+      poll: 0
+      when: item.hostname in (pre_status.results | selectattr('failed', 'equalto', false) | map(attribute='item.hostname') | list)
+      loop_control:
+        label: "{{ item.hostname }}"
+
+    - name: Wait for TLS configuration to complete
+      ansible.builtin.async_status:
+        jid: "{{ item.ansible_job_id }}"
+      loop: "{{ tls_config.results }}"
+      register: tls_config_result
+      until: tls_config_result.finished
+      retries: 60
+      delay: 5
+      when: item.ansible_job_id is defined
+      loop_control:
+        label: "{{ item.item.hostname if item.item is defined else 'N/A' }}"
+
+    # =========================================================================
+    # Phase 4: Verify HTTPS Connectivity
+    # =========================================================================
+
+    - name: Wait for AMT to apply TLS configuration
+      ansible.builtin.pause:
+        seconds: 15
+        prompt: "Waiting for AMT firmware to apply TLS settings..."
+
+    - name: Verify HTTPS connectivity
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.hostname }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false  # Set to true once CA is trusted
+      loop: "{{ amt_hosts }}"
+      register: post_status
+      ignore_errors: true
+      loop_control:
+        label: "{{ item.hostname }}"
+
+    - name: Report HTTPS status
+      ansible.builtin.debug:
+        msg:
+          - "Successfully secured via HTTPS: {{ post_status.results | selectattr('failed', 'equalto', false) | map(attribute='item.hostname') | list }}"
+          - "Failed to enable HTTPS: {{ post_status.results | selectattr('failed', 'equalto', true) | map(attribute='item.hostname') | list }}"
+
+    # =========================================================================
+    # Phase 5: Generate Summary Report
+    # =========================================================================
+
+    - name: Generate configuration summary
+      ansible.builtin.set_fact:
+        security_summary:
+          total_systems: "{{ amt_hosts | length }}"
+          http_accessible: "{{ pre_status.results | selectattr('failed', 'equalto', false) | list | length }}"
+          https_enabled: "{{ post_status.results | selectattr('failed', 'equalto', false) | list | length }}"
+          certificates_issued: "{{ tls_config_result.results | selectattr('changed', 'equalto', true) | list | length }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Display security summary
+      ansible.builtin.debug:
+        var: security_summary
+
+    - name: Save configuration report
+      ansible.builtin.copy:
+        content: |
+          # Intel AMT Fleet Security Configuration Report
+          # Generated: {{ ansible_date_time.iso8601 }}
+
+          ## Summary
+          - Total Systems: {{ security_summary.total_systems }}
+          - HTTP Accessible: {{ security_summary.http_accessible }}
+          - HTTPS Enabled: {{ security_summary.https_enabled }}
+          - Certificates Issued: {{ security_summary.certificates_issued }}
+
+          ## Systems Successfully Secured with HTTPS
+          {% for result in post_status.results %}
+          {% if not result.failed %}
+          - {{ result.item.hostname }}
+            - AMT Version: {{ result.amt_version | default('Unknown') }}
+            - IP Address: {{ result.ipv4_address | default('Unknown') }}
+            - Certificate: {{ cert_base_path }}/{{ result.item.nickname }}.crt
+          {% endif %}
+          {% endfor %}
+
+          ## Systems Requiring Manual Configuration
+          {% for result in post_status.results %}
+          {% if result.failed %}
+          - {{ result.item.hostname }}
+            - Status: {{ result.msg | default('Connection failed') }}
+            - Action Required: Manual certificate configuration via Intel MEBx
+            - Certificate Available: {{ cert_base_path }}/{{ result.item.nickname }}.crt
+          {% endif %}
+          {% endfor %}
+
+          ## Certificate Management
+
+          ### List All Tracked Certificates
+          ```bash
+          ipa-getcert list | grep "amt-"
+          ```
+
+          ### Check Specific Certificate
+          ```bash
+          ipa-getcert list -n {{ amt_hosts[0].nickname }}
+          ```
+
+          ### Renew Certificate Manually
+          ```bash
+          ipa-getcert resubmit -n <nickname>
+          ```
+
+          ## Next Steps
+
+          1. Verify HTTPS connectivity to all systems
+          2. Update inventory to use port 16993
+          3. Configure applications to use HTTPS endpoints
+          4. Set up automated certificate renewal monitoring
+          5. Consider disabling HTTP (port 16992) after validation period
+
+          ## Manual Configuration for Failed Systems
+
+          For systems that require manual certificate configuration:
+
+          1. Reboot the system
+          2. Press Ctrl+P during boot to enter Intel MEBx
+          3. Enter AMT admin password
+          4. Navigate to: Remote Setup and Configuration → TLS PKI
+          5. Select "Import Certificate"
+          6. Copy certificate contents from: {{ cert_base_path }}/<nickname>.crt
+          7. Copy private key contents from: {{ cert_base_path }}/<nickname>.key
+          8. Save and exit MEBx
+          9. Verify HTTPS connectivity
+
+        dest: "/tmp/amt_security_report_{{ ansible_date_time.date }}.md"
+        mode: '0644'
+
+    - name: Display report location
+      ansible.builtin.debug:
+        msg: "Configuration report saved to: /tmp/amt_security_report_{{ ansible_date_time.date }}.md"
+
+    # =========================================================================
+    # Phase 6: Post-Configuration Tasks
+    # =========================================================================
+
+    - name: Set up certificate renewal monitoring (optional)
+      ansible.builtin.cron:
+        name: "Check AMT certificate expiration"
+        minute: "0"
+        hour: "2"
+        day: "1"
+        job: "ipa-getcert list | grep -E 'amt-|expires' | mail -s 'AMT Certificate Status' root"
+        state: present
+      when: false  # Set to true to enable
+
+    - name: Final recommendations
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT Fleet Security Configuration Complete"
+          - "=========================================="
+          - ""
+          - "✅ {{ security_summary.https_enabled }} of {{ security_summary.total_systems }} systems secured with HTTPS"
+          - ""
+          - "📋 Next Steps:"
+          - "  1. Review report: /tmp/amt_security_report_{{ ansible_date_time.date }}.md"
+          - "  2. Test HTTPS connectivity to all systems"
+          - "  3. Update monitoring to use HTTPS endpoints"
+          - "  4. Configure automated certificate renewal"
+          - "  5. Consider disabling HTTP after validation"
+          - ""
+          - "⚠️  Systems requiring manual configuration:"
+          - "{{ post_status.results | selectattr('failed', 'equalto', true) | map(attribute='item.hostname') | list }}"
+          - ""
+          - "=========================================="

@@ -1,0 +1,154 @@
+---
+# Fleet management with nested configuration lists
+
+- name: AMT Fleet - Nested Configuration Model
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Fleet with per-system configuration lists
+    amt_fleet:
+      - name: c1s2n2
+        host: 192.168.254.209
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+
+        # System-specific configuration
+        system_config:
+          hostname: c1s2n2
+          domain: amt.parmstrong.ca
+
+        # Power policy configuration
+        power_policy:
+          idle_timeout: 1
+          link_policy: always_on
+
+        # Users to manage (future - when amt_user supports creation)
+        users:
+          - username: admin
+            state: present
+          - username: operator
+            state: present
+            # new_password: "{{ vault_operator_password }}"
+
+      - name: c1s2n3
+        host: 192.168.254.210
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+
+        system_config:
+          hostname: c1s2n3
+          domain: amt.parmstrong.ca
+
+        power_policy:
+          idle_timeout: 5
+          link_policy: power_save
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    # =========================================================================
+    # Pattern 1: Configure system settings per host
+    # =========================================================================
+
+    - name: Configure system settings for each host
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        system_name: "{{ item.system_config.hostname }}"
+        domain_name: "{{ item.system_config.domain }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: system_config_results
+
+    - name: Display system configuration results
+      ansible.builtin.debug:
+        msg:
+          - "{{ item.item.name }}: {{ item.system_name }}.{{ item.domain_name }}"
+          - "  Changed: {{ item.changed }}"
+      loop: "{{ system_config_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # =========================================================================
+    # Pattern 2: Configure power policy per host
+    # =========================================================================
+
+    - name: Configure power policy for each host
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+        idle_timeout: "{{ item.power_policy.idle_timeout }}"
+        link_policy: "{{ item.power_policy.link_policy }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: power_policy_results
+
+    - name: Display power policy results
+      ansible.builtin.debug:
+        msg:
+          - "{{ item.item.name }}: idle={{ item.idle_timeout }}s, link={{ item.link_policy }}"
+          - "  Changed: {{ item.changed }}"
+      loop: "{{ power_policy_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # =========================================================================
+    # Pattern 3: Nested loop - users per host (future capability)
+    # =========================================================================
+
+    - name: Manage users on each host
+      when: item.1.state is defined
+      parmstro.intel_amt.amt_user:
+        host: "{{ item.0.host }}"
+        username: "{{ item.0.username }}"
+        password: "{{ item.0.password }}"
+        port: "{{ item.0.port }}"
+        use_tls: "{{ item.0.use_tls }}"
+        target_user: "{{ item.1.username }}"
+        state: "{{ item.1.state }}"
+        new_password: "{{ item.1.new_password | default(omit) }}"
+      loop: "{{ amt_fleet | subelements('users', skip_missing=True) }}"
+      loop_control:
+        label: "{{ item.0.name }} - user: {{ item.1.username }}"
+      register: user_management_results
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+
+    - name: Display configuration summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Fleet Configuration Summary"
+          - "=========================================="
+          - "Systems configured: {{ amt_fleet | length }}"
+          - ""
+          - "System settings:"
+          - "  Changed: {{ system_config_results.results | selectattr('changed', 'equalto', true) | list | length }}"
+          - "  Unchanged: {{ system_config_results.results | selectattr('changed', 'equalto', false) | list | length }}"
+          - ""
+          - "Power policies:"
+          - "  Changed: {{ power_policy_results.results | selectattr('changed', 'equalto', true) | list | length }}"
+          - "  Unchanged: {{ power_policy_results.results | selectattr('changed', 'equalto', false) | list | length }}"
+          - "=========================================="

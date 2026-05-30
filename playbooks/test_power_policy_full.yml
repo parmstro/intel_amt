@@ -1,0 +1,76 @@
+---
+# Test amt_power_policy with full WSMAN implementation
+
+- name: Test AMT Power Policy Module
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_host: "192.168.254.209"  # c1s2n2
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Query current power policy
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      register: current_policy
+
+    - name: Display current policy
+      ansible.builtin.debug:
+        msg:
+          - "Current Power Policy:"
+          - "  Wake-on-LAN: {{ current_policy.wake_on_lan }}"
+          - "  Idle Timeout: {{ current_policy.idle_timeout }}"
+          - "  Link Policy: {{ current_policy.link_policy }}"
+          - "  Changed: {{ current_policy.changed }}"
+
+    - name: Test idle timeout change
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        idle_timeout: 5
+      register: test_change
+
+    - name: Display test change
+      ansible.builtin.debug:
+        msg:
+          - "Test Change Result:"
+          - "  Wake-on-LAN: {{ test_change.wake_on_lan }}"
+          - "  Idle Timeout: {{ test_change.idle_timeout }}"
+          - "  Link Policy: {{ test_change.link_policy }}"
+          - "  Changed: {{ test_change.changed }}"
+          - "  Message: {{ test_change.msg }}"
+
+    - name: Restore original timeout
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        idle_timeout: 1
+      register: restore
+
+    - name: Display restore
+      ansible.builtin.debug:
+        msg:
+          - "Restore Result:"
+          - "  Wake-on-LAN: {{ restore.wake_on_lan }}"
+          - "  Idle Timeout: {{ restore.idle_timeout }}"
+          - "  Link Policy: {{ restore.link_policy }}"
+          - "  Changed: {{ restore.changed }}"
+          - "  Message: {{ restore.msg }}"

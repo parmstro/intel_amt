@@ -1,0 +1,51 @@
+# Ansible Lint Configuration for parmstro.intel_amt collection
+
+profile: production  # Most strict profile
+
+# Exclude paths
+exclude_paths:
+  - .git/
+  - .github/
+  - tests/output/
+  - '*.tar.gz'
+
+# Enable specific rules
+enable_list:
+  - yaml
+  - name
+  - args
+  - command-instead-of-module
+  - no-changed-when
+  - no-handler
+  - package-latest
+
+# Skip specific rules if needed
+skip_list:
+  - experimental  # Skip experimental rules for now
+
+# Warn about these but don't fail
+warn_list:
+  - unnamed-task  # Warn but don't fail on unnamed tasks in tests
+  - no-free-form  # Warn on free-form commands
+
+# Collection-specific settings
+kinds:
+  - yaml: '**/*.yml'
+  - yaml: '**/*.yaml'
+  - playbook: '**/playbooks/*.yml'
+  - tasks: '**/tasks/*.yml'
+  - vars: '**/vars/*.yml'
+  - meta: '**/meta/*.yml'
+
+# Offline mode for testing without internet
+offline: false
+
+# Progressive mode - strict
+progressive: true
+
+# Treat warnings as errors in CI
+strict: false  # Set to true in CI
+
+# Custom rules directory
+# rulesdir:
+#   - .ansible-lint-rules/

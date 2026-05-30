@@ -1,0 +1,166 @@
+---
+# Test fleet roles with chassis 1, stack 2, nodes 1-5
+
+- name: Test AMT Fleet Roles
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Test fleet: c1s2n1 through c1s2n5
+    amt_test_fleet:
+      c1s2n1:
+        host: 192.168.254.208
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      c1s2n2:
+        host: 192.168.254.209
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      c1s2n3:
+        host: 192.168.254.210
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      c1s2n4:
+        host: 192.168.254.211
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      c1s2n5:
+        host: 192.168.254.212
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+
+  tasks:
+    - name: Load vault credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    # =========================================================================
+    # Test 1: Fleet Status Role
+    # =========================================================================
+
+    - name: "TEST 1: Check fleet status"
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "TEST 1: Fleet Status Role"
+          - "=========================================="
+
+    - name: Get fleet status
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_status
+      vars:
+        amt_fleet_targets: "{{ amt_test_fleet }}"
+        amt_fleet_show_summary: true
+        amt_fleet_show_details: true
+        amt_fleet_results_file: /tmp/test_fleet_status.md
+
+    - name: Verify status role output
+      ansible.builtin.assert:
+        that:
+          - amt_fleet_status_summary is defined
+          - amt_fleet_status_summary.total == 5
+        success_msg: "Fleet status role working correctly"
+
+    # =========================================================================
+    # Test 2: Fleet Power Role (Query)
+    # =========================================================================
+
+    - name: "TEST 2: Fleet power query"
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "TEST 2: Fleet Power Role (Query)"
+          - "=========================================="
+
+    - name: Query fleet power state
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_power
+      vars:
+        amt_fleet_targets: "{{ amt_test_fleet }}"
+        amt_fleet_power_state: query
+        amt_fleet_show_summary: true
+
+    - name: Verify power role output
+      ansible.builtin.assert:
+        that:
+          - amt_fleet_summary is defined
+          - amt_fleet_summary.total == 5
+        success_msg: "Fleet power role working correctly"
+
+    # =========================================================================
+    # Test 3: Fleet Configure Role
+    # =========================================================================
+
+    - name: "TEST 3: Fleet configuration"
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "TEST 3: Fleet Configure Role"
+          - "=========================================="
+
+    - name: Configure fleet
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_configure
+      vars:
+        amt_fleet_targets: "{{ amt_test_fleet }}"
+        amt_fleet_config:
+          domain_name: amt.parmstrong.ca
+          idle_timeout: 1
+          link_policy: always_on
+        amt_fleet_configure_system: true
+        amt_fleet_configure_power_policy: true
+        amt_fleet_parallel_limit: 5
+
+    - name: Verify configure role output
+      ansible.builtin.assert:
+        that:
+          - amt_fleet_config_summary is defined
+          - amt_fleet_config_summary.total == 5
+        success_msg: "Fleet configure role working correctly"
+
+    # =========================================================================
+    # Final Summary
+    # =========================================================================
+
+    - name: Display final test summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "FLEET ROLES TEST SUMMARY"
+          - "=========================================="
+          - ""
+          - "Test Fleet: {{ amt_test_fleet | length }} systems (c1s2n1-c1s2n5)"
+          - ""
+          - "Test 1 - Fleet Status:"
+          - "  Total: {{ amt_fleet_status_summary.total }}"
+          - "  Reachable: {{ amt_fleet_status_summary.reachable }}"
+          - "  Availability: {{ amt_fleet_status_summary.availability }}%"
+          - ""
+          - "Test 2 - Fleet Power:"
+          - "  Total: {{ amt_fleet_summary.total }}"
+          - "  Successful: {{ amt_fleet_summary.successful }}"
+          - "  Success rate: {{ amt_fleet_summary.success_rate }}%"
+          - ""
+          - "Test 3 - Fleet Configure:"
+          - "  Total: {{ amt_fleet_config_summary.total }}"
+          - "  System configured: {{ amt_fleet_config_summary.system_configured }}"
+          - "  Policy configured: {{ amt_fleet_config_summary.policy_configured }}"
+          - ""
+          - "=========================================="
+          - "ALL TESTS COMPLETED ✅"
+          - "=========================================="

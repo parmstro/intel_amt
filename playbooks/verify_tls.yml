@@ -1,0 +1,98 @@
+---
+# Verify HTTPS is working after manual MEBx configuration
+#
+# Usage:
+#   ansible-playbook playbooks/verify_tls.yml \
+#     --vault-password-file .vault_password \
+#     -e test_amt_host=c1s2n2.amt.parmstrong.ca
+
+- name: Verify AMT HTTPS Configuration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_amt_host: "{{ test_amt_host | default('c1s2n2.amt.parmstrong.ca') }}"
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Test HTTP connectivity (should still work)
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16992
+        use_tls: false
+      register: http_status
+      ignore_errors: true
+
+    - name: Test HTTPS connectivity
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false
+      register: https_status
+      ignore_errors: true
+
+    - name: Test HTTPS power query
+      parmstro.intel_amt.amt_power:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false
+        state: query
+      register: https_power
+      ignore_errors: true
+
+    - name: Display verification results
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT HTTPS VERIFICATION RESULTS"
+          - "=========================================="
+          - "System: {{ test_amt_host }}"
+          - ""
+          - "Connectivity Tests:"
+          - "  HTTP (port 16992):  {{ '✅ Accessible' if not http_status.failed else '❌ Not accessible' }}"
+          - "  HTTPS (port 16993): {{ '✅ Accessible' if not https_status.failed else '❌ Not accessible' }}"
+          - ""
+          - "{% if not https_status.failed %}System Information via HTTPS:{% endif %}"
+          - "{% if not https_status.failed %}  AMT Version: {{ https_status.amt_version }}{% endif %}"
+          - "{% if not https_status.failed %}  BIOS Version: {{ https_status.bios_version }}{% endif %}"
+          - "{% if not https_status.failed %}  IP Address: {{ https_status.ipv4_address }}{% endif %}"
+          - "{% if not https_status.failed %}  MAC Address: {{ https_status.mac_address }}{% endif %}"
+          - ""
+          - "{% if not https_power.failed %}Power Management via HTTPS:{% endif %}"
+          - "{% if not https_power.failed %}  Power State: {{ https_power.power_state }}{% endif %}"
+          - "{% if not https_power.failed %}  ✅ Power control working over HTTPS{% endif %}"
+          - ""
+          - "{% if https_status.failed %}❌ HTTPS Not Working{% endif %}"
+          - "{% if https_status.failed %}   Check:{% endif %}"
+          - "{% if https_status.failed %}   - Certificate imported correctly in MEBx{% endif %}"
+          - "{% if https_status.failed %}   - System rebooted after import{% endif %}"
+          - "{% if https_status.failed %}   - Firewall allows port 16993{% endif %}"
+          - "{% if https_status.failed %}   - No typos in certificate/key during paste{% endif %}"
+          - ""
+          - "{% if not https_status.failed %}✅ SUCCESS! HTTPS fully functional{% endif %}"
+          - "{% if not https_status.failed %}   Update your playbooks to use:{% endif %}"
+          - "{% if not https_status.failed %}   - port: 16993{% endif %}"
+          - "{% if not https_status.failed %}   - use_tls: true{% endif %}"
+          - "{% if not https_status.failed %}   - verify_ssl: false (or true with trusted CA){% endif %}"
+          - ""
+          - "=========================================="
+
+    - name: Fail if HTTPS not working
+      ansible.builtin.fail:
+        msg: "HTTPS verification failed. Review MEBx configuration."
+      when: https_status.failed

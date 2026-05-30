@@ -1,0 +1,7 @@
+---
+# Integration test configuration for c1s2n2.amt.parmstrong.ca
+# Password is stored in vault.yml (encrypted)
+amt_test_host: c1s2n2.amt.parmstrong.ca
+amt_test_user: admin
+amt_test_port: 16992
+amt_test_tls: false

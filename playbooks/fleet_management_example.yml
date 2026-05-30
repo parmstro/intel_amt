@@ -1,0 +1,129 @@
+---
+# Example: Comprehensive fleet management using aggregator roles
+
+- name: Intel AMT Fleet Management Example
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Define fleet - 3 chassis × 2 stacks × 7 nodes = 42 systems
+    # Example shows chassis 1, stack 2 only
+    amt_fleet:
+      c1s2n2:
+        host: 192.168.254.209
+        username: admin
+        password: "{{ vault_amt_password }}"
+        port: 16992
+        use_tls: false
+      c1s2n3:
+        host: 192.168.254.210
+        username: admin
+        password: "{{ vault_amt_password }}"
+        port: 16992
+        use_tls: false
+      # Add remaining 40 systems here...
+
+  tasks:
+    # =========================================================================
+    # Phase 1: Fleet Health Check
+    # =========================================================================
+
+    - name: Check fleet status
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_status
+      vars:
+        amt_fleet_targets: "{{ amt_fleet }}"
+        amt_fleet_show_details: true
+        amt_fleet_results_file: /tmp/amt_fleet_status_{{ ansible_date_time.epoch }}.md
+
+    - name: Verify fleet availability
+      ansible.builtin.assert:
+        that:
+          - amt_fleet_status_summary.availability | float >= 95.0
+        fail_msg: "Fleet availability {{ amt_fleet_status_summary.availability }}% below 95% threshold"
+        success_msg: "Fleet availability {{ amt_fleet_status_summary.availability }}% meets requirements"
+
+    # =========================================================================
+    # Phase 2: Standard Configuration
+    # =========================================================================
+
+    - name: Apply standard AMT configuration
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_configure
+      vars:
+        amt_fleet_targets: "{{ amt_fleet }}"
+        amt_fleet_config:
+          # System settings - use key as hostname
+          domain_name: amt.parmstrong.ca
+          # Power policy - minimize idle timeout, enable WoL
+          idle_timeout: 1
+          link_policy: always_on
+        amt_fleet_configure_system: true
+        amt_fleet_configure_power_policy: true
+        amt_fleet_parallel_limit: 10
+
+    # =========================================================================
+    # Phase 3: Targeted Power Operations
+    # =========================================================================
+
+    - name: Power on all systems
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_power
+      vars:
+        amt_fleet_targets: "{{ amt_fleet }}"
+        amt_fleet_power_state: on
+        amt_fleet_parallel_limit: 5
+        amt_fleet_operation_delay: 2
+        amt_fleet_results_file: /tmp/amt_fleet_power_on_{{ ansible_date_time.epoch }}.md
+
+    - name: Verify all systems powered on
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_status
+      vars:
+        amt_fleet_targets: "{{ amt_fleet }}"
+        amt_fleet_show_summary: true
+
+    - name: Check power-on success
+      ansible.builtin.debug:
+        msg: "{{ amt_fleet_status_summary.powered_on }}/{{ amt_fleet_status_summary.total }} systems powered on"
+
+    # =========================================================================
+    # Phase 4: Maintenance Window Operations
+    # =========================================================================
+
+    - name: Graceful shutdown for maintenance
+      when: maintenance_mode | default(false)
+      block:
+        - name: Announce maintenance window
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "MAINTENANCE WINDOW STARTING"
+              - "Graceful shutdown of {{ amt_fleet | length }} systems"
+              - "=========================================="
+
+        - name: Shutdown fleet
+          ansible.builtin.include_role:
+            name: parmstro.intel_amt.amt_fleet_power
+          vars:
+            amt_fleet_targets: "{{ amt_fleet }}"
+            amt_fleet_power_state: off
+            amt_fleet_parallel_limit: 3
+            amt_fleet_operation_delay: 10
+
+        - name: Wait for shutdown completion
+          ansible.builtin.pause:
+            seconds: 30
+
+        - name: Verify shutdown
+          ansible.builtin.include_role:
+            name: parmstro.intel_amt.amt_fleet_status
+          vars:
+            amt_fleet_targets: "{{ amt_fleet }}"
+
+        - name: Confirm all systems off
+          ansible.builtin.assert:
+            that:
+              - amt_fleet_status_summary.powered_off == amt_fleet_status_summary.reachable
+            fail_msg: "Some systems still powered on"
+            success_msg: "All systems successfully shut down"

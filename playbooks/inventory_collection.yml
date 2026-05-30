@@ -1,0 +1,62 @@
+---
+# Collect comprehensive inventory from NUC fleet
+- name: Collect NUC Fleet Inventory
+  hosts: nucs
+  gather_facts: false
+  serial: 10
+
+  vars_prompt:
+    - name: amt_password
+      prompt: "Enter AMT password"
+      private: true
+
+  tasks:
+    - name: Get comprehensive system status
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username | default('admin') }}"
+        password: "{{ amt_password }}"
+        port: "{{ amt_port | default(16992) }}"
+        use_tls: "{{ amt_use_tls | default(false) }}"
+      register: nuc_info
+      ignore_errors: true
+
+    - name: Add to inventory facts
+      ansible.builtin.set_fact:
+        amt_inventory:
+          power_state: "{{ nuc_info.power_state | default('unknown') }}"
+          ipv4: "{{ nuc_info.ipv4_address | default('N/A') }}"
+          ipv6: "{{ nuc_info.ipv6_address | default('N/A') }}"
+          mac: "{{ nuc_info.mac_address | default('N/A') }}"
+          bios: "{{ nuc_info.bios_version | default('N/A') }}"
+          system_id: "{{ nuc_info.system_id | default('N/A') }}"
+          amt_time: "{{ nuc_info.amt_time | default('N/A') }}"
+      when: nuc_info is not failed
+
+    - name: Display inventory
+      ansible.builtin.debug:
+        msg: |
+          {{ inventory_hostname }}:
+            Power: {{ amt_inventory.power_state }}
+            IPv4: {{ amt_inventory.ipv4 }}
+            IPv6: {{ amt_inventory.ipv6 }}
+            MAC: {{ amt_inventory.mac }}
+            BIOS: {{ amt_inventory.bios }}
+      when: amt_inventory is defined
+
+- name: Generate Inventory Report
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Create inventory JSON
+      ansible.builtin.copy:
+        content: "{{ hostvars | to_nice_json }}"
+        dest: "/tmp/nuc_inventory_report.json"
+        mode: '0644'
+      delegate_to: localhost
+      run_once: true
+      when: hostvars is defined
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: "Inventory collection complete. Check output above and /tmp/nuc_inventory_*.json"

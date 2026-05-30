@@ -1,0 +1,117 @@
+---
+# Fleet status monitoring - aggregator pattern
+
+- name: Validate amt_fleet_targets
+  ansible.builtin.assert:
+    that:
+      - amt_fleet_targets is defined
+      - amt_fleet_targets | length > 0
+    fail_msg: "amt_fleet_targets must be defined and non-empty"
+
+- name: Query status from all fleet systems
+  parmstro.intel_amt.amt_host_status:
+    host: "{{ item.value.host }}"
+    username: "{{ item.value.username }}"
+    password: "{{ item.value.password }}"
+    port: "{{ item.value.port | default(16992) }}"
+    use_tls: "{{ item.value.use_tls | default(false) }}"
+    verify_ssl: "{{ item.value.verify_ssl | default(false) }}"
+  loop: "{{ amt_fleet_targets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: amt_fleet_status_results
+  ignore_errors: "{{ amt_fleet_continue_on_error }}"
+  throttle: "{{ amt_fleet_parallel_limit }}"
+
+- name: Aggregate fleet status
+  ansible.builtin.set_fact:
+    amt_fleet_status_summary:
+      total: "{{ amt_fleet_status_results.results | length }}"
+      reachable: "{{ amt_fleet_status_results.results | rejectattr('failed', 'defined') | list | length }}"
+      unreachable: "{{ amt_fleet_status_results.results | selectattr('failed', 'defined') | list | length }}"
+      powered_on: "{{ amt_fleet_status_results.results | rejectattr('failed', 'defined') | selectattr('power_state', 'equalto', 'on') | list | length }}"
+      powered_off: "{{ amt_fleet_status_results.results | rejectattr('failed', 'defined') | selectattr('power_state', 'equalto', 'off') | list | length }}"
+      availability: "{{ ((amt_fleet_status_results.results | rejectattr('failed', 'defined') | list | length) / (amt_fleet_status_results.results | length) * 100) | round(1) }}"
+
+- name: Display fleet status summary
+  when: amt_fleet_show_summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "AMT Fleet Status Summary"
+      - "=========================================="
+      - "Total systems: {{ amt_fleet_status_summary.total }}"
+      - "Reachable: {{ amt_fleet_status_summary.reachable }}"
+      - "Unreachable: {{ amt_fleet_status_summary.unreachable }}"
+      - "Powered ON: {{ amt_fleet_status_summary.powered_on }}"
+      - "Powered OFF: {{ amt_fleet_status_summary.powered_off }}"
+      - "Availability: {{ amt_fleet_status_summary.availability }}%"
+      - "=========================================="
+
+- name: Display detailed status
+  when: amt_fleet_show_details
+  ansible.builtin.debug:
+    msg:
+      - "System: {{ item.item.key }}"
+      - "  Host: {{ item.item.value.host }}"
+      - "  Status: {{ 'REACHABLE ✅' if not item.failed else 'UNREACHABLE ❌' }}"
+      - "  Power: {{ item.power_state | default('Unknown') | upper }}"
+      - "  AMT Version: {{ item.amt_version | default('N/A') }}"
+      - "  UUID: {{ item.system_uuid | default('N/A') }}"
+  loop: "{{ amt_fleet_status_results.results }}"
+  loop_control:
+    label: "{{ item.item.key }}"
+
+- name: Display unreachable systems
+  when:
+    - amt_fleet_show_failures
+    - amt_fleet_status_summary.unreachable | int > 0
+  ansible.builtin.debug:
+    msg:
+      - "Unreachable systems:"
+      - "{{ amt_fleet_status_results.results | selectattr('failed', 'defined') | map(attribute='item.key') | list | join(', ') }}"
+
+- name: Get current timestamp
+  when: amt_fleet_results_file is defined
+  ansible.builtin.setup:
+    gather_subset:
+      - '!all'
+      - '!min'
+      - date_time
+
+- name: Create fleet status report
+  when: amt_fleet_results_file is defined
+  ansible.builtin.copy:
+    content: |
+      # Intel AMT Fleet Status Report
+      # Generated: {{ ansible_date_time.iso8601 | default(lookup('pipe', 'date --iso-8601=seconds')) }}
+
+      ## Summary
+      - Total Systems: {{ amt_fleet_status_summary.total }}
+      - Reachable: {{ amt_fleet_status_summary.reachable }}
+      - Unreachable: {{ amt_fleet_status_summary.unreachable }}
+      - Powered ON: {{ amt_fleet_status_summary.powered_on }}
+      - Powered OFF: {{ amt_fleet_status_summary.powered_off }}
+      - Availability: {{ amt_fleet_status_summary.availability }}%
+
+      ## System Details
+      | System | Host | Status | Power | AMT Version | UUID |
+      |--------|------|--------|-------|-------------|------|
+      {% for result in amt_fleet_status_results.results %}
+      | {{ result.item.key }} | {{ result.item.value.host }} | {{ 'OK' if not result.failed else 'FAIL' }} | {{ result.power_state | default('N/A') }} | {{ result.amt_version | default('N/A') }} | {{ result.system_uuid | default('N/A') }} |
+      {% endfor %}
+
+      ## Unreachable Systems
+      {% if amt_fleet_status_summary.unreachable | int > 0 %}
+      {% for result in amt_fleet_status_results.results %}
+      {% if result.failed %}
+      ### {{ result.item.key }}
+      - Host: {{ result.item.value.host }}
+      - Error: {{ result.msg | default('Connection failed') }}
+      {% endif %}
+      {% endfor %}
+      {% else %}
+      All systems reachable ✅
+      {% endif %}
+    dest: "{{ amt_fleet_results_file }}"
+    mode: '0644'

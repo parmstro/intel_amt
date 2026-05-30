@@ -1,0 +1,123 @@
+---
+# Bulk operations on fleet with list model
+
+- name: AMT Fleet Bulk Operations
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Simple fleet list
+    amt_fleet:
+      - name: c1s2n2
+        host: 192.168.254.209
+        username: admin
+        password: "{{ amt_test_password }}"
+
+      - name: c1s2n3
+        host: 192.168.254.210
+        username: admin
+        password: "{{ amt_test_password }}"
+
+    # Bulk configuration applied to ALL systems
+    standard_config:
+      system:
+        domain_name: amt.parmstrong.ca
+      power_policy:
+        idle_timeout: 1
+        link_policy: always_on
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    # =========================================================================
+    # Use Case 1: Query all systems
+    # =========================================================================
+
+    - name: Query fleet status
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port | default(16992) }}"
+        use_tls: "{{ item.use_tls | default(false) }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: fleet_status
+
+    - name: Show fleet power states
+      ansible.builtin.debug:
+        msg: "{{ amt_fleet | map(attribute='name') | list | zip(fleet_status.results | map(attribute='power_state') | list) | list }}"
+
+    # =========================================================================
+    # Use Case 2: Apply standard configuration to all
+    # =========================================================================
+
+    - name: Apply standard domain to all systems
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port | default(16992) }}"
+        use_tls: "{{ item.use_tls | default(false) }}"
+        system_name: "{{ item.name }}"  # Use list item name
+        domain_name: "{{ standard_config.system.domain_name }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Apply standard power policy to all systems
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port | default(16992) }}"
+        use_tls: "{{ item.use_tls | default(false) }}"
+        idle_timeout: "{{ standard_config.power_policy.idle_timeout }}"
+        link_policy: "{{ standard_config.power_policy.link_policy }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    # =========================================================================
+    # Use Case 3: Conditional operations
+    # =========================================================================
+
+    - name: Power on systems that are off
+      when: item.power_state == 'off'
+      parmstro.intel_amt.amt_power:
+        host: "{{ item.item.host }}"
+        username: "{{ item.item.username }}"
+        password: "{{ item.item.password }}"
+        port: "{{ item.item.port | default(16992) }}"
+        use_tls: "{{ item.item.use_tls | default(false) }}"
+        state: on
+      loop: "{{ fleet_status.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    # =========================================================================
+    # Use Case 4: Parallel execution with throttle
+    # =========================================================================
+
+    - name: Reboot all systems (throttled)
+      parmstro.intel_amt.amt_power:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port | default(16992) }}"
+        use_tls: "{{ item.use_tls | default(false) }}"
+        state: reboot
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+        pause: 5  # 5 second delay between reboots
+      throttle: 2  # Only 2 concurrent reboots
+      when: perform_reboot | default(false)

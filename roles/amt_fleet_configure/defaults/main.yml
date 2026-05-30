@@ -1,0 +1,23 @@
+---
+# Fleet configuration management defaults
+
+amt_fleet_targets: {}
+
+# Configuration to apply
+amt_fleet_config:
+  # System settings (optional)
+  # system_name: "{{ inventory_hostname }}"
+  # domain_name: amt.parmstrong.ca
+
+  # Power policy (optional)
+  # idle_timeout: 1
+  # link_policy: always_on
+
+# What to configure (enable specific modules)
+amt_fleet_configure_system: false
+amt_fleet_configure_power_policy: false
+
+# Execution settings
+amt_fleet_continue_on_error: true
+amt_fleet_parallel_limit: 10
+amt_fleet_show_summary: true

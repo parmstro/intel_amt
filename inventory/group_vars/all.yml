@@ -1,0 +1,14 @@
+---
+# Global variables for all hosts
+
+# Map vault variables to user-facing variables
+# Vaulted values use _vault suffix for easy identification
+# Fallback to environment variables for CI/CD (lookup returns '' if not found)
+amt_username: "{{ amt_username_vault | default(lookup('env', 'AMT_USERNAME')) }}"
+amt_password: "{{ amt_password_vault | default(lookup('env', 'AMT_PASSWORD')) }}"
+amt_port: 16992
+amt_use_tls: false
+amt_verify_ssl: false
+
+# Default AMT domain
+amt_domain: amt.parmstrong.ca

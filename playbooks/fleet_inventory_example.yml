@@ -1,0 +1,83 @@
+---
+# Example: Building fleet inventory dynamically
+
+- name: Build AMT Fleet Inventory
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Base configuration
+    amt_base_config:
+      username: admin
+      password: "{{ vault_amt_password }}"
+      port: 16992
+      use_tls: false
+
+    # Chassis/Stack/Node structure: 3 × 2 × 7 = 42 systems
+    chassis_count: 3
+    stacks_per_chassis: 2
+    nodes_per_stack: 7
+
+    # IP addressing: 192.168.254.200-241 (42 IPs)
+    amt_base_ip: "192.168.254"
+    amt_start_offset: 200
+
+  tasks:
+    - name: Generate fleet inventory
+      ansible.builtin.set_fact:
+        amt_fleet_inventory: |
+          {% set fleet = {} %}
+          {% for chassis in range(1, chassis_count + 1) %}
+          {%   for stack in range(1, stacks_per_chassis + 1) %}
+          {%     for node in range(1, nodes_per_stack + 1) %}
+          {%       set system_id = 'c' ~ chassis ~ 's' ~ stack ~ 'n' ~ node %}
+          {%       set ip_offset = ((chassis - 1) * stacks_per_chassis * nodes_per_stack) + ((stack - 1) * nodes_per_stack) + (node - 1) %}
+          {%       set ip_addr = amt_base_ip ~ '.' ~ (amt_start_offset + ip_offset) %}
+          {%       set _ = fleet.update({
+                     system_id: {
+                       'host': ip_addr,
+                       'username': amt_base_config.username,
+                       'password': amt_base_config.password,
+                       'port': amt_base_config.port,
+                       'use_tls': amt_base_config.use_tls,
+                       'chassis': chassis,
+                       'stack': stack,
+                       'node': node
+                     }
+                   }) %}
+          {%     endfor %}
+          {%   endfor %}
+          {% endfor %}
+          {{ fleet }}
+
+    - name: Parse inventory
+      ansible.builtin.set_fact:
+        amt_fleet: "{{ amt_fleet_inventory | from_yaml }}"
+
+    - name: Display inventory statistics
+      ansible.builtin.debug:
+        msg:
+          - "Generated AMT fleet inventory:"
+          - "  Total systems: {{ amt_fleet | length }}"
+          - "  Chassis: {{ chassis_count }}"
+          - "  Stacks per chassis: {{ stacks_per_chassis }}"
+          - "  Nodes per stack: {{ nodes_per_stack }}"
+          - "  IP range: {{ amt_base_ip }}.{{ amt_start_offset }} - {{ amt_base_ip }}.{{ amt_start_offset + (amt_fleet | length) - 1 }}"
+          - ""
+          - "Sample systems:"
+          - "  {{ amt_fleet.keys() | list | first }}: {{ amt_fleet[amt_fleet.keys() | list | first].host }}"
+          - "  {{ amt_fleet.keys() | list | last }}: {{ amt_fleet[amt_fleet.keys() | list | last].host }}"
+
+    - name: Save inventory to file
+      ansible.builtin.copy:
+        content: "{{ amt_fleet | to_nice_yaml }}"
+        dest: /tmp/amt_fleet_inventory.yml
+        mode: '0600'
+
+    - name: Run fleet status check with generated inventory
+      ansible.builtin.include_role:
+        name: parmstro.intel_amt.amt_fleet_status
+      vars:
+        amt_fleet_targets: "{{ amt_fleet }}"
+        amt_fleet_show_summary: true
+        amt_fleet_show_details: false

@@ -1,0 +1,286 @@
+---
+# Manual certificate generation and upload to Intel AMT
+#
+# This playbook demonstrates manual certificate workflow without IPA/certmonger.
+# Useful for testing, lab environments, or when IPA is not available.
+#
+# Prerequisites:
+#   - community.crypto collection installed
+#   - AMT systems accessible via HTTP (port 16992)
+#   - Valid AMT admin credentials
+#
+# Install requirements:
+#   ansible-galaxy collection install community.crypto
+#
+# Usage:
+#   ansible-playbook playbooks/manual_certificate_upload.yml --vault-password-file .vault_password
+
+- name: Manual Certificate Generation and AMT Configuration
+  hosts: localhost
+  gather_facts: false
+  vars:
+    cert_dir: /etc/pki/amt
+    amt_host: c1s2n2.amt.parmstrong.ca
+    cert_validity_days: 365
+
+  tasks:
+    # =========================================================================
+    # Phase 1: Setup
+    # =========================================================================
+
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Create certificate directory
+      ansible.builtin.file:
+        path: "{{ cert_dir }}"
+        state: directory
+        mode: '0755'
+      become: true
+
+    # =========================================================================
+    # Phase 2: Generate Self-Signed Certificate (for testing)
+    # =========================================================================
+
+    - name: Generate private key
+      community.crypto.openssl_privatekey:
+        path: "{{ cert_dir }}/{{ amt_host }}.key"
+        size: 2048
+        mode: '0600'
+      become: true
+
+    - name: Generate certificate signing request (CSR)
+      community.crypto.openssl_csr:
+        path: "{{ cert_dir }}/{{ amt_host }}.csr"
+        privatekey_path: "{{ cert_dir }}/{{ amt_host }}.key"
+        common_name: "{{ amt_host }}"
+        organization_name: "Lab Environment"
+        organizational_unit_name: "Infrastructure"
+        country_name: "US"
+        state_or_province_name: "State"
+        locality_name: "City"
+        subject_alt_name:
+          - "DNS:{{ amt_host }}"
+          - "IP:192.168.254.209"  # Adjust to match your AMT IP
+      become: true
+
+    - name: Generate self-signed certificate
+      community.crypto.x509_certificate:
+        path: "{{ cert_dir }}/{{ amt_host }}.crt"
+        privatekey_path: "{{ cert_dir }}/{{ amt_host }}.key"
+        csr_path: "{{ cert_dir }}/{{ amt_host }}.csr"
+        provider: selfsigned
+        selfsigned_not_after: "+{{ cert_validity_days }}d"
+        mode: '0644'
+      become: true
+
+    - name: Display certificate information
+      community.crypto.x509_certificate_info:
+        path: "{{ cert_dir }}/{{ amt_host }}.crt"
+      register: cert_info
+      become: true
+
+    - name: Show certificate details
+      ansible.builtin.debug:
+        msg:
+          - "Certificate generated successfully"
+          - "Subject: {{ cert_info.subject }}"
+          - "Issuer: {{ cert_info.issuer }}"
+          - "Valid from: {{ cert_info.not_before }}"
+          - "Valid until: {{ cert_info.not_after }}"
+          - "Serial: {{ cert_info.serial_number }}"
+
+    # =========================================================================
+    # Phase 3: Verify Current AMT Status
+    # =========================================================================
+
+    - name: Check current AMT status via HTTP
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16992
+        use_tls: false
+      register: pre_status
+
+    - name: Display current configuration
+      ansible.builtin.debug:
+        msg:
+          - "AMT Version: {{ pre_status.amt_version }}"
+          - "IP Address: {{ pre_status.ipv4_address }}"
+          - "Current Protocol: HTTP (port 16992)"
+
+    # =========================================================================
+    # Phase 4: Upload Certificate and Enable HTTPS
+    # =========================================================================
+
+    - name: Upload certificate and enable HTTPS
+      parmstro.intel_amt.amt_tls_config:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16992
+        use_tls: false
+        tls_enabled: true
+        certificate_path: "{{ cert_dir }}/{{ amt_host }}.crt"
+        private_key_path: "{{ cert_dir }}/{{ amt_host }}.key"
+      register: tls_result
+      become: true
+
+    - name: Display TLS configuration result
+      ansible.builtin.debug:
+        var: tls_result
+
+    # =========================================================================
+    # Phase 5: Verify HTTPS Connectivity
+    # =========================================================================
+
+    - name: Wait for AMT to apply configuration
+      ansible.builtin.pause:
+        seconds: 10
+        prompt: "Waiting for AMT to apply TLS configuration..."
+
+    - name: Test HTTPS connectivity
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false  # Self-signed cert won't verify
+      register: https_status
+      ignore_errors: true
+
+    - name: Report HTTPS status
+      ansible.builtin.debug:
+        msg: "{{ 'HTTPS enabled successfully!' if not https_status.failed else 'HTTPS not accessible - manual configuration may be required' }}"
+
+    # =========================================================================
+    # Phase 6: Manual Configuration Instructions (if needed)
+    # =========================================================================
+
+    - name: Display manual configuration instructions
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Manual Certificate Upload Required"
+          - "=========================================="
+          - ""
+          - "If WSMAN upload failed, configure via Intel MEBx:"
+          - ""
+          - "1. Reboot {{ amt_host }}"
+          - "2. Press Ctrl+P during boot"
+          - "3. Enter AMT admin password"
+          - "4. Navigate to: Remote Setup and Configuration → TLS PKI"
+          - "5. Select 'Import Certificate'"
+          - "6. Certificate file: {{ cert_dir }}/{{ amt_host }}.crt"
+          - "7. Private key file: {{ cert_dir }}/{{ amt_host }}.key"
+          - ""
+          - "To view certificate contents:"
+          - "  cat {{ cert_dir }}/{{ amt_host }}.crt"
+          - ""
+          - "To view private key contents:"
+          - "  sudo cat {{ cert_dir }}/{{ amt_host }}.key"
+          - ""
+          - "=========================================="
+      when: tls_result.warnings is defined or https_status.failed
+
+    # =========================================================================
+    # Phase 7: Test Both HTTP and HTTPS
+    # =========================================================================
+
+    - name: Test HTTP access (should still work)
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16992
+        use_tls: false
+      register: http_test
+      ignore_errors: true
+
+    - name: Test HTTPS access
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false
+      register: https_test
+      ignore_errors: true
+
+    - name: Display final connectivity report
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT Connectivity Report"
+          - "=========================================="
+          - "Host: {{ amt_host }}"
+          - ""
+          - "HTTP (port 16992): {{ 'Accessible ✅' if not http_test.failed else 'Not accessible ❌' }}"
+          - "HTTPS (port 16993): {{ 'Accessible ✅' if not https_test.failed else 'Not accessible ❌' }}"
+          - ""
+          - "Certificate Location: {{ cert_dir }}/{{ amt_host }}.crt"
+          - "Private Key Location: {{ cert_dir }}/{{ amt_host }}.key"
+          - ""
+          - "{% if not https_test.failed %}Recommendation: Update your inventory to use HTTPS by default{% else %}Action Required: Complete manual certificate configuration via MEBx{% endif %}"
+          - "=========================================="
+
+# Alternative approach: Generate certificate with CA signing
+# Uncomment and modify this section if you have a local CA
+
+# - name: Generate CA-signed certificate (alternative)
+#   hosts: localhost
+#   gather_facts: false
+#   vars:
+#     ca_dir: /etc/pki/CA
+#     cert_dir: /etc/pki/amt
+#     amt_host: c1s2n2.amt.parmstrong.ca
+#
+#   tasks:
+#     - name: Generate private key for CA
+#       community.crypto.openssl_privatekey:
+#         path: "{{ ca_dir }}/ca.key"
+#         size: 4096
+#       become: true
+#
+#     - name: Generate CA certificate
+#       community.crypto.x509_certificate:
+#         path: "{{ ca_dir }}/ca.crt"
+#         privatekey_path: "{{ ca_dir }}/ca.key"
+#         provider: selfsigned
+#         selfsigned_not_after: "+3650d"
+#         basic_constraints:
+#           - "CA:TRUE"
+#         basic_constraints_critical: true
+#       become: true
+#
+#     - name: Generate AMT private key
+#       community.crypto.openssl_privatekey:
+#         path: "{{ cert_dir }}/{{ amt_host }}.key"
+#         size: 2048
+#       become: true
+#
+#     - name: Generate AMT CSR
+#       community.crypto.openssl_csr:
+#         path: "{{ cert_dir }}/{{ amt_host }}.csr"
+#         privatekey_path: "{{ cert_dir }}/{{ amt_host }}.key"
+#         common_name: "{{ amt_host }}"
+#       become: true
+#
+#     - name: Sign AMT certificate with CA
+#       community.crypto.x509_certificate:
+#         path: "{{ cert_dir }}/{{ amt_host }}.crt"
+#         csr_path: "{{ cert_dir }}/{{ amt_host }}.csr"
+#         provider: ownca
+#         ownca_path: "{{ ca_dir }}/ca.crt"
+#         ownca_privatekey_path: "{{ ca_dir }}/ca.key"
+#         ownca_not_after: "+365d"
+#       become: true

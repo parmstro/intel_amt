@@ -1,0 +1,81 @@
+---
+# Test fleet operations across multiple NUC hosts
+# Tests all 4 working modules against c1s2n2, c1s2n3, c1s2n4
+- name: Test AMT Fleet Operations
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    amt_hosts:
+      - c1s2n2.amt.parmstrong.ca
+      - c1s2n3.amt.parmstrong.ca
+      - c1s2n4.amt.parmstrong.ca
+    amt_port: 16992
+    amt_tls: false
+
+  tasks:
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        file: vault/test_credentials.yml
+      no_log: true
+
+    - name: "=== Fleet Status Check ==="
+      ansible.builtin.debug:
+        msg: "Checking status of {{ amt_hosts | length }} NUC systems..."
+
+    - name: Query power state for all hosts
+      parmstro.intel_amt.amt_power:
+        host: "{{ item }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: "{{ amt_port }}"
+        use_tls: "{{ amt_tls }}"
+        state: query
+      loop: "{{ amt_hosts }}"
+      register: fleet_power_states
+
+    - name: Display fleet power states
+      ansible.builtin.debug:
+        msg: "{{ item.item }}: {{ item.power_state }}"
+      loop: "{{ fleet_power_states.results }}"
+
+    - name: Get detailed status for all hosts
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: "{{ amt_port }}"
+        use_tls: "{{ amt_tls }}"
+      loop: "{{ amt_hosts }}"
+      register: fleet_status
+
+    - name: Display fleet inventory
+      ansible.builtin.debug:
+        msg: |
+          Host: {{ item.item }}
+            System: {{ item.system_name | default('N/A') }}
+            Power: {{ item.power_state | default('unknown') }}
+            IPv4: {{ item.ipv4_address | default('N/A') }}
+            MAC: {{ item.mac_address | default('N/A') }}
+            BIOS: {{ item.bios_version | default('N/A') }}
+      loop: "{{ fleet_status.results }}"
+
+    - name: "=== Fleet Summary ==="
+      ansible.builtin.set_fact:
+        fleet_summary:
+          total_hosts: "{{ amt_hosts | length }}"
+          powered_on: "{{ fleet_power_states.results | selectattr('power_state', 'equalto', 'on') | list | length }}"
+          powered_off: "{{ fleet_power_states.results | selectattr('power_state', 'equalto', 'off') | list | length }}"
+          reachable: "{{ fleet_status.results | rejectattr('failed', 'defined') | list | length }}"
+
+    - name: Display fleet summary
+      ansible.builtin.debug:
+        msg: |
+          ========================================
+          Fleet Summary
+          ========================================
+          Total Hosts: {{ fleet_summary.total_hosts }}
+          Reachable: {{ fleet_summary.reachable }}
+          Powered On: {{ fleet_summary.powered_on }}
+          Powered Off: {{ fleet_summary.powered_off }}
+          ========================================

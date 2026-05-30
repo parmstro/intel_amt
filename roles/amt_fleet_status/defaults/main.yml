@@ -1,0 +1,18 @@
+---
+# Fleet status monitoring defaults
+
+amt_fleet_targets: {}
+
+# Continue on errors
+amt_fleet_continue_on_error: true
+
+# Parallel execution limit
+amt_fleet_parallel_limit: 10
+
+# Results display
+amt_fleet_show_summary: true
+amt_fleet_show_details: true
+amt_fleet_show_failures: true
+
+# Optional results file
+# amt_fleet_results_file: /tmp/amt_fleet_status.md

@@ -1,0 +1,49 @@
+---
+# Variables for management_node group
+# This is where AMT fleet data is defined
+
+# AMT Fleet Definition
+# List of all Intel AMT systems to manage
+# Uses variables from group_vars/all.yml (amt_username, amt_password, etc.)
+amt_fleet:
+  - name: c1s2n2
+    host: 192.168.254.209
+    username: "{{ amt_username }}"
+    password: "{{ amt_password }}"
+    port: "{{ amt_port }}"
+    use_tls: "{{ amt_use_tls }}"
+    chassis: 1
+    stack: 2
+    node: 2
+
+  - name: c1s2n3
+    host: 192.168.254.210
+    username: "{{ amt_username }}"
+    password: "{{ amt_password }}"
+    port: "{{ amt_port }}"
+    use_tls: "{{ amt_use_tls }}"
+    chassis: 1
+    stack: 2
+    node: 3
+
+  # Add remaining 40 systems...
+  # - name: c1s2n4
+  #   host: 192.168.254.211
+  #   username: "{{ amt_username }}"
+  #   password: "{{ amt_password }}"
+  #   port: "{{ amt_port }}"
+  #   use_tls: "{{ amt_use_tls }}"
+  #   chassis: 1
+  #   stack: 2
+  #   node: 4
+
+# Standard AMT Configuration
+amt_standard_config:
+  domain_name: "{{ amt_domain }}"
+  idle_timeout: 1
+  link_policy: always_on
+
+# Fleet operation defaults
+amt_fleet_parallel_limit: 10
+amt_fleet_continue_on_error: true
+amt_fleet_operation_delay: 2

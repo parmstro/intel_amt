@@ -1,0 +1,46 @@
+# Ansible
+*.retry
+
+# Vault password files
+.vault_password
+.vault_pass
+vault_pass.txt
+
+# Vault directory - .gitkeep is committed but actual vault files are excluded for safety
+# Encrypted vault files CAN be committed but we exclude them by default
+vault/*.yml
+vault/*.yaml
+!vault/README.md
+!vault/.gitkeep
+
+# Debug/test scripts (may contain credentials)
+debug_*.py
+test_*.py
+*_debug.py
+
+# Build artifacts
+*.tar.gz
+parmstro-intel_amt-*.tar.gz
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

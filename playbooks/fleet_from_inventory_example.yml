@@ -1,0 +1,50 @@
+---
+# Build fleet configuration from Ansible inventory
+
+- name: AMT Fleet from Inventory
+  hosts: amt_systems
+  gather_facts: false
+
+  tasks:
+    - name: Configure AMT system settings
+      delegate_to: localhost
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: "{{ amt_port | default(16992) }}"
+        use_tls: "{{ amt_use_tls | default(false) }}"
+        system_name: "{{ inventory_hostname_short }}"
+        domain_name: "{{ amt_domain }}"
+
+    - name: Configure AMT power policy
+      delegate_to: localhost
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: "{{ amt_port | default(16992) }}"
+        use_tls: "{{ amt_use_tls | default(false) }}"
+        idle_timeout: "{{ amt_idle_timeout | default(1) }}"
+        link_policy: "{{ amt_link_policy | default('always_on') }}"
+
+# Example inventory.yml:
+# ---
+# all:
+#   children:
+#     amt_systems:
+#       hosts:
+#         c1s2n2:
+#           amt_host: 192.168.254.209
+#           amt_username: admin
+#           amt_password: "{{ vault_amt_password }}"
+#           amt_domain: amt.parmstrong.ca
+#           amt_idle_timeout: 1
+#           amt_link_policy: always_on
+#         c1s2n3:
+#           amt_host: 192.168.254.210
+#           amt_username: admin
+#           amt_password: "{{ vault_amt_password }}"
+#           amt_domain: amt.parmstrong.ca
+#           amt_idle_timeout: 5
+#           amt_link_policy: power_save

@@ -1,0 +1,377 @@
+---
+# Explore AMT 10.0.56 WSMAN resources to discover capabilities
+# This will help us implement the three new modules fully
+
+- name: Explore AMT WSMAN Resources
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_host: "{{ test_host | default('192.168.254.209') }}"
+
+    # Known CIM/AMT resource URIs to test
+    resources_to_probe:
+      # Power Management Resources
+      - uri: "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_PowerManagementService"
+        name: "CIM_PowerManagementService"
+        category: "Power Policy"
+        selector: "Name"
+        selector_value: "Intel(r) AMT Power Management Service"
+
+      - uri: "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_PowerManagementCapabilities"
+        name: "CIM_PowerManagementCapabilities"
+        category: "Power Policy"
+        selector: null
+
+      # System Settings Resources
+      - uri: "http://intel.com/wbem/wscim/1/amt-schema/1/AMT_GeneralSettings"
+        name: "AMT_GeneralSettings"
+        category: "System Settings"
+        selector: "InstanceID"
+        selector_value: "Intel(r) AMT: General Settings"
+
+      - uri: "http://schemas.dmtf.org/wbem/wscim/1/cim-schema/2/CIM_ComputerSystem"
+        name: "CIM_ComputerSystem"
+        category: "System Settings"
+        selector: "Name"
+        selector_value: "ManagedSystem"
+
+      # User Management Resources
+      - uri: "http://intel.com/wbem/wscim/1/amt-schema/1/AMT_AuthorizationService"
+        name: "AMT_AuthorizationService"
+        category: "User Management"
+        selector: null
+
+      - uri: "http://intel.com/wbem/wscim/1/amt-schema/1/AMT_SetupAndConfigurationService"
+        name: "AMT_SetupAndConfigurationService"
+        category: "User Management"
+        selector: null
+
+      # Wake-on-LAN Resources
+      - uri: "http://intel.com/wbem/wscim/1/amt-schema/1/AMT_EthernetPortSettings"
+        name: "AMT_EthernetPortSettings"
+        category: "Power Policy"
+        selector: "InstanceID"
+        selector_value: "Intel(r) AMT Ethernet Port Settings 0"
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Display exploration plan
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT WSMAN Resource Explorer"
+          - "=========================================="
+          - "Target: {{ test_host }}"
+          - "Resources to probe: {{ resources_to_probe | length }}"
+          - ""
+          - "Categories:"
+          - "  - Power Policy ({{ resources_to_probe | selectattr('category', 'equalto', 'Power Policy') | list | length }} resources)"
+          - "  - System Settings ({{ resources_to_probe | selectattr('category', 'equalto', 'System Settings') | list | length }} resources)"
+          - "  - User Management ({{ resources_to_probe | selectattr('category', 'equalto', 'User Management') | list | length }} resources)"
+          - "=========================================="
+
+    - name: Copy WSMAN probe script
+      ansible.builtin.copy:
+        src: ../scripts/amt_probe.py
+        dest: /tmp/amt_probe.py
+        mode: '0755'
+
+    - name: OLD Create WSMAN probe script
+      when: false
+      ansible.builtin.copy:
+        content: |
+          #!/usr/bin/env python3
+          import sys
+          import requests
+          from requests.auth import HTTPDigestAuth
+          from lxml import etree
+          import urllib3
+          import json
+
+          urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+          def create_envelope(action, resource_uri, selector_set=None):
+              SOAP_NS = 'http://www.w3.org/2003/05/soap-envelope'
+              WSA_NS = 'http://schemas.xmlsoap.org/ws/2004/08/addressing'
+              WSMAN_NS = 'http://schemas.dmtf.org/wbem/wsman/1/wsman.xsd'
+
+              envelope = etree.Element(f'{{{SOAP_NS}}}Envelope',
+                  nsmap={'s': SOAP_NS, 'a': WSA_NS, 'w': WSMAN_NS})
+
+              header = etree.SubElement(envelope, f'{{{SOAP_NS}}}Header')
+
+              action_elem = etree.SubElement(header, f'{{{WSA_NS}}}Action',
+                  {f'{{{SOAP_NS}}}mustUnderstand': 'true'})
+              action_elem.text = action
+
+              to_elem = etree.SubElement(header, f'{{{WSA_NS}}}To',
+                  {f'{{{SOAP_NS}}}mustUnderstand': 'true'})
+              to_elem.text = sys.argv[1]  # base_url
+
+              resource_elem = etree.SubElement(header, f'{{{WSMAN_NS}}}ResourceURI',
+                  {f'{{{SOAP_NS}}}mustUnderstand': 'true'})
+              resource_elem.text = resource_uri
+
+              msg_id = etree.SubElement(header, f'{{{WSA_NS}}}MessageID',
+                  {f'{{{SOAP_NS}}}mustUnderstand': 'true'})
+              msg_id.text = 'uuid:00000000-8086-8086-8086-000000000001'
+
+              reply_to = etree.SubElement(header, f'{{{WSA_NS}}}ReplyTo')
+              address = etree.SubElement(reply_to, f'{{{WSA_NS}}}Address')
+              address.text = 'http://schemas.xmlsoap.org/ws/2004/08/addressing/role/anonymous'
+
+              if selector_set:
+                  sel_set = etree.SubElement(header, f'{{{WSMAN_NS}}}SelectorSet')
+                  for name, value in selector_set.items():
+                      selector = etree.SubElement(sel_set, f'{{{WSMAN_NS}}}Selector', Name=name)
+                      selector.text = value
+
+              body = etree.SubElement(envelope, f'{{{SOAP_NS}}}Body')
+              return envelope
+
+          def probe_resource(base_url, username, password, resource_uri, selector_set=None):
+              action = 'http://schemas.xmlsoap.org/ws/2004/09/transfer/Get'
+              envelope = create_envelope(action, resource_uri, selector_set)
+              xml_data = etree.tostring(envelope, encoding='utf-8', xml_declaration=True)
+
+              headers = {'Content-Type': 'application/soap+xml;charset=UTF-8'}
+              auth = HTTPDigestAuth(username, password)
+
+              try:
+                  response = requests.post(base_url, data=xml_data, headers=headers,
+                                         auth=auth, verify=False, timeout=10)
+
+                  result = {
+                      'status_code': response.status_code,
+                      'success': response.status_code == 200,
+                      'error': None,
+                      'data': None
+                  }
+
+                  if response.status_code == 200:
+                      # Parse response to extract useful data
+                      root = etree.fromstring(response.content)
+                      # Extract body content
+                      body = root.find('.//{http://www.w3.org/2003/05/soap-envelope}Body')
+                      if body is not None:
+                          # Get first child of body (the actual resource data)
+                          resource_data = list(body)[0] if len(body) > 0 else None
+                          if resource_data is not None:
+                              result['data'] = etree.tostring(resource_data, encoding='unicode')
+                  else:
+                      result['error'] = f"HTTP {response.status_code}"
+
+                  return result
+
+              except Exception as e:
+                  return {
+                      'status_code': 0,
+                      'success': False,
+                      'error': str(e),
+                      'data': None
+                  }
+
+          if __name__ == '__main__':
+              # Args: base_url, username, password, resource_uri, [selector_name, selector_value]
+              base_url = sys.argv[1]
+              username = sys.argv[2]
+              password = sys.argv[3]
+              resource_uri = sys.argv[4]
+
+              selector_set = None
+              if len(sys.argv) > 6:
+                  selector_set = {sys.argv[5]: sys.argv[6]}
+
+              result = probe_resource(base_url, username, password, resource_uri, selector_set)
+              print(json.dumps(result))
+        dest: /tmp/amt_probe.py
+        mode: '0755'
+
+    - name: Probe each WSMAN resource
+      ansible.builtin.command:
+        cmd: >
+          python3 /tmp/amt_probe.py
+          "http://{{ test_host }}:16992/wsman"
+          "{{ amt_test_user }}"
+          "{{ amt_test_password }}"
+          "{{ item.uri }}"
+          {% if item.selector %}{{ item.selector }}{% endif %}
+          {% if item.selector_value %}{{ item.selector_value }}{% endif %}
+      loop: "{{ resources_to_probe }}"
+      register: probe_results
+      changed_when: false
+      ignore_errors: true
+
+    - name: Parse probe results
+      ansible.builtin.set_fact:
+        parsed_results: "{{ parsed_results | default([]) + [item | combine({'result': item.stdout | from_json})] }}"
+      loop: "{{ probe_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"
+
+    - name: Generate results by category
+      ansible.builtin.set_fact:
+        power_policy_resources: "{{ parsed_results | selectattr('item.category', 'equalto', 'Power Policy') | list }}"
+        system_settings_resources: "{{ parsed_results | selectattr('item.category', 'equalto', 'System Settings') | list }}"
+        user_mgmt_resources: "{{ parsed_results | selectattr('item.category', 'equalto', 'User Management') | list }}"
+
+    - name: Display Power Policy Resources
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "POWER POLICY RESOURCES"
+          - "=========================================="
+          - "{% for r in power_policy_resources %}"
+          - "{{ r.item.name }}:"
+          - "  URI: {{ r.item.uri }}"
+          - "  Status: {{ 'Available ✅' if r.result.success else 'Not Available ❌' }}"
+          - "  {% if not r.result.success %}Error: {{ r.result.error }}{% endif %}"
+          - "  {% if r.result.success and r.result.data %}Has Data: Yes{% endif %}"
+          - "{% endfor %}"
+
+    - name: Display System Settings Resources
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "SYSTEM SETTINGS RESOURCES"
+          - "=========================================="
+          - "{% for r in system_settings_resources %}"
+          - "{{ r.item.name }}:"
+          - "  URI: {{ r.item.uri }}"
+          - "  Status: {{ 'Available ✅' if r.result.success else 'Not Available ❌' }}"
+          - "  {% if not r.result.success %}Error: {{ r.result.error }}{% endif %}"
+          - "  {% if r.result.success and r.result.data %}Has Data: Yes{% endif %}"
+          - "{% endfor %}"
+
+    - name: Display User Management Resources
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "USER MANAGEMENT RESOURCES"
+          - "=========================================="
+          - "{% for r in user_mgmt_resources %}"
+          - "{{ r.item.name }}:"
+          - "  URI: {{ r.item.uri }}"
+          - "  Status: {{ 'Available ✅' if r.result.success else 'Not Available ❌' }}"
+          - "  {% if not r.result.success %}Error: {{ r.result.error }}{% endif %}"
+          - "  {% if r.result.success and r.result.data %}Has Data: Yes{% endif %}"
+          - "{% endfor %}"
+
+    - name: Save detailed results
+      ansible.builtin.copy:
+        content: |
+          # AMT 10.0.56 WSMAN Resource Exploration Results
+          # Generated: {{ ansible_date_time.iso8601 }}
+          # Target: {{ test_host }}
+
+          ## Summary
+
+          Total Resources Probed: {{ resources_to_probe | length }}
+          Available: {{ parsed_results | selectattr('result.success', 'equalto', true) | list | length }}
+          Not Available: {{ parsed_results | selectattr('result.success', 'equalto', false) | list | length }}
+
+          ## Power Policy Resources
+
+          {% for r in power_policy_resources %}
+          ### {{ r.item.name }}
+          - **URI**: `{{ r.item.uri }}`
+          - **Status**: {{ 'Available ✅' if r.result.success else 'Not Available ❌' }}
+          {% if r.item.selector %}- **Selector**: {{ r.item.selector }}={{ r.item.selector_value }}{% endif %}
+          {% if not r.result.success %}- **Error**: {{ r.result.error }}{% endif %}
+          {% if r.result.success and r.result.data %}
+          - **Data Retrieved**: Yes
+          ```xml
+          {{ r.result.data }}
+          ```
+          {% endif %}
+
+          {% endfor %}
+
+          ## System Settings Resources
+
+          {% for r in system_settings_resources %}
+          ### {{ r.item.name }}
+          - **URI**: `{{ r.item.uri }}`
+          - **Status**: {{ 'Available ✅' if r.result.success else 'Not Available ❌' }}
+          {% if r.item.selector %}- **Selector**: {{ r.item.selector }}={{ r.item.selector_value }}{% endif %}
+          {% if not r.result.success %}- **Error**: {{ r.result.error }}{% endif %}
+          {% if r.result.success and r.result.data %}
+          - **Data Retrieved**: Yes
+          ```xml
+          {{ r.result.data }}
+          ```
+          {% endif %}
+
+          {% endfor %}
+
+          ## User Management Resources
+
+          {% for r in user_mgmt_resources %}
+          ### {{ r.item.name }}
+          - **URI**: `{{ r.item.uri }}`
+          - **Status**: {{ 'Available ✅' if r.result.success else 'Not Available ❌' }}
+          {% if r.item.selector %}- **Selector**: {{ r.item.selector }}={{ r.item.selector_value }}{% endif %}
+          {% if not r.result.success %}- **Error**: {{ r.result.error }}{% endif %}
+          {% if r.result.success and r.result.data %}
+          - **Data Retrieved**: Yes
+          ```xml
+          {{ r.result.data }}
+          ```
+          {% endif %}
+
+          {% endfor %}
+
+          ## Implementation Recommendations
+
+          Based on these findings:
+
+          {% if power_policy_resources | selectattr('result.success', 'equalto', true) | list | length > 0 %}
+          ### Power Policy Module
+          Available resources for implementation:
+          {% for r in power_policy_resources | selectattr('result.success', 'equalto', true) %}
+          - {{ r.item.name }}
+          {% endfor %}
+          {% else %}
+          ### Power Policy Module
+          ⚠️ No WSMAN resources available. May need to use MEBx or alternative approach.
+          {% endif %}
+
+          {% if system_settings_resources | selectattr('result.success', 'equalto', true) | list | length > 0 %}
+          ### System Settings Module
+          Available resources for implementation:
+          {% for r in system_settings_resources | selectattr('result.success', 'equalto', true) %}
+          - {{ r.item.name }}
+          {% endfor %}
+          {% else %}
+          ### System Settings Module
+          ⚠️ No WSMAN resources available. May need to use MEBx or alternative approach.
+          {% endif %}
+
+          {% if user_mgmt_resources | selectattr('result.success', 'equalto', true) | list | length > 0 %}
+          ### User Management Module
+          Available resources for implementation:
+          {% for r in user_mgmt_resources | selectattr('result.success', 'equalto', true) %}
+          - {{ r.item.name }}
+          {% endfor %}
+          {% else %}
+          ### User Management Module
+          ⚠️ No WSMAN resources available. May need to use MEBx or alternative approach.
+          {% endif %}
+        dest: /tmp/amt_resource_exploration_results.md
+        mode: '0644'
+
+    - name: Display results file location
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Exploration complete!"
+          - "Detailed results saved to: /tmp/amt_resource_exploration_results.md"
+          - "=========================================="

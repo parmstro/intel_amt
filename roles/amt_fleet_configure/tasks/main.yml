@@ -1,0 +1,85 @@
+---
+# Fleet configuration management - aggregator pattern
+
+- name: Validate configuration
+  ansible.builtin.assert:
+    that:
+      - amt_fleet_targets is defined
+      - amt_fleet_targets | length > 0
+      - amt_fleet_config is defined
+      - amt_fleet_configure_system or amt_fleet_configure_power_policy
+    fail_msg: "Fleet targets and configuration must be defined"
+
+- name: Display configuration plan
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "AMT Fleet Configuration"
+      - "=========================================="
+      - "Targets: {{ amt_fleet_targets | length }} systems"
+      - "Configure system settings: {{ amt_fleet_configure_system }}"
+      - "Configure power policy: {{ amt_fleet_configure_power_policy }}"
+      - "=========================================="
+
+- name: Configure system settings across fleet
+  when: amt_fleet_configure_system
+  parmstro.intel_amt.amt_system_settings:
+    host: "{{ item.value.host }}"
+    username: "{{ item.value.username }}"
+    password: "{{ item.value.password }}"
+    port: "{{ item.value.port | default(16992) }}"
+    use_tls: "{{ item.value.use_tls | default(false) }}"
+    verify_ssl: "{{ item.value.verify_ssl | default(false) }}"
+    system_name: "{{ amt_fleet_config.system_name | default(item.key) }}"
+    domain_name: "{{ amt_fleet_config.domain_name | default(omit) }}"
+  loop: "{{ amt_fleet_targets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: amt_fleet_system_results
+  ignore_errors: "{{ amt_fleet_continue_on_error }}"
+  throttle: "{{ amt_fleet_parallel_limit }}"
+
+- name: Configure power policy across fleet
+  when: amt_fleet_configure_power_policy
+  parmstro.intel_amt.amt_power_policy:
+    host: "{{ item.value.host }}"
+    username: "{{ item.value.username }}"
+    password: "{{ item.value.password }}"
+    port: "{{ item.value.port | default(16992) }}"
+    use_tls: "{{ item.value.use_tls | default(false) }}"
+    verify_ssl: "{{ item.value.verify_ssl | default(false) }}"
+    idle_timeout: "{{ amt_fleet_config.idle_timeout | default(omit) }}"
+    link_policy: "{{ amt_fleet_config.link_policy | default(omit) }}"
+  loop: "{{ amt_fleet_targets | dict2items }}"
+  loop_control:
+    label: "{{ item.key }}"
+  register: amt_fleet_policy_results
+  ignore_errors: "{{ amt_fleet_continue_on_error }}"
+  throttle: "{{ amt_fleet_parallel_limit }}"
+
+- name: Aggregate configuration results
+  ansible.builtin.set_fact:
+    amt_fleet_config_summary:
+      total: "{{ amt_fleet_targets | length }}"
+      system_configured: "{{ amt_fleet_system_results.results | default([]) | rejectattr('failed', 'defined') | list | length if amt_fleet_configure_system else 0 }}"
+      system_failed: "{{ amt_fleet_system_results.results | default([]) | selectattr('failed', 'defined') | list | length if amt_fleet_configure_system else 0 }}"
+      policy_configured: "{{ amt_fleet_policy_results.results | default([]) | rejectattr('failed', 'defined') | list | length if amt_fleet_configure_power_policy else 0 }}"
+      policy_failed: "{{ amt_fleet_policy_results.results | default([]) | selectattr('failed', 'defined') | list | length if amt_fleet_configure_power_policy else 0 }}"
+
+- name: Display configuration summary
+  when: amt_fleet_show_summary
+  ansible.builtin.debug:
+    msg:
+      - "=========================================="
+      - "Fleet Configuration Summary"
+      - "=========================================="
+      - "Total systems: {{ amt_fleet_config_summary.total }}"
+      - ""
+      - "System Settings:"
+      - "  Configured: {{ amt_fleet_config_summary.system_configured }}"
+      - "  Failed: {{ amt_fleet_config_summary.system_failed }}"
+      - ""
+      - "Power Policy:"
+      - "  Configured: {{ amt_fleet_config_summary.policy_configured }}"
+      - "  Failed: {{ amt_fleet_config_summary.policy_failed }}"
+      - "=========================================="

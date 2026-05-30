@@ -1,0 +1,51 @@
+---
+# Test amt_network_settings module
+- name: Test AMT Network Settings Module
+  hosts: localhost
+  gather_facts: false
+
+  tasks:
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        file: vault/test_credentials.yml
+      no_log: true
+
+    - name: Test 1 - Get current network settings (check mode)
+      parmstro.intel_amt.amt_network_settings:
+        host: c1s2n2.amt.parmstrong.ca
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      check_mode: true
+      register: current_settings
+      ignore_errors: true
+
+    - name: Display test result
+      ansible.builtin.debug:
+        var: current_settings
+
+    - name: Test 2 - Try to read settings (no changes)
+      parmstro.intel_amt.amt_network_settings:
+        host: c1s2n2.amt.parmstrong.ca
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      register: read_settings
+      ignore_errors: true
+
+    - name: Display current config
+      ansible.builtin.debug:
+        msg: |
+          Current Network Configuration:
+            DHCP: {{ read_settings.previous_config.dhcp_enabled | default('N/A') }}
+            IPv4: {{ read_settings.previous_config.ip_address | default('N/A') }}
+            Subnet: {{ read_settings.previous_config.subnet_mask | default('N/A') }}
+            Gateway: {{ read_settings.previous_config.gateway | default('N/A') }}
+            DNS1: {{ read_settings.previous_config.primary_dns | default('N/A') }}
+            DNS2: {{ read_settings.previous_config.secondary_dns | default('N/A') }}
+            Ping: {{ read_settings.previous_config.ping_response_enabled | default('N/A') }}
+            IPv6 Enabled: {{ read_settings.previous_config.ipv6_enabled | default('N/A') }}
+            IPv6 Addr: {{ read_settings.previous_config.ipv6_address | default('N/A') }}
+      when: read_settings is not failed

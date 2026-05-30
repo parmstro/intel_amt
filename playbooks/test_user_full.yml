@@ -1,0 +1,37 @@
+---
+# Test amt_user module
+
+- name: Test AMT User Module
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_host: "192.168.254.209"  # c1s2n2
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Verify admin user exists
+      parmstro.intel_amt.amt_user:
+        host: "{{ test_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        target_user: admin
+        state: present
+      register: user_check
+
+    - name: Display user verification
+      ansible.builtin.debug:
+        msg:
+          - "User Verification:"
+          - "  Target User: {{ user_check.target_user }}"
+          - "  State: {{ user_check.state }}"
+          - "  Message: {{ user_check.msg }}"

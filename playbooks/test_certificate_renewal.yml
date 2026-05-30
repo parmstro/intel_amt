@@ -1,0 +1,302 @@
+---
+# Test certificate renewal/update via HTTPS on already-configured AMT system
+#
+# This tests whether certificate updates work via WSMAN over HTTPS
+# after initial manual MEBx configuration.
+#
+# Prerequisites:
+#   - AMT system already configured with HTTPS enabled
+#   - Accessible via port 16993
+#   - Initial certificate installed via MEBx
+#
+# Usage:
+#   ansible-playbook playbooks/test_certificate_renewal.yml \
+#     --vault-password-file .vault_password \
+#     -e test_amt_host=192.168.254.200
+
+- name: Test Certificate Renewal via HTTPS
+  hosts: localhost
+  gather_facts: true
+  vars:
+    test_amt_host: "{{ test_amt_host | default('192.168.254.200') }}"
+    cert_dir: /tmp/amt_renewal_test
+
+  tasks:
+    - name: Display test purpose
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT Certificate Renewal Test"
+          - "=========================================="
+          - "Purpose: Test if certificate updates work via WSMAN over HTTPS"
+          - "System: {{ test_amt_host }}"
+          - "Connection: HTTPS port 16993"
+          - ""
+          - "This tests whether automated certificate renewal is possible"
+          - "after initial manual MEBx configuration."
+          - "=========================================="
+
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Create test certificate directory
+      ansible.builtin.file:
+        path: "{{ cert_dir }}"
+        state: directory
+        mode: '0755'
+
+    # =========================================================================
+    # Phase 1: Verify HTTPS is currently working
+    # =========================================================================
+
+    - name: Test current HTTPS connectivity
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false
+      register: https_status
+      ignore_errors: true
+
+    - name: Verify HTTPS is enabled
+      ansible.builtin.assert:
+        that:
+          - not https_status.failed
+        fail_msg: |
+          HTTPS is not accessible on {{ test_amt_host }}:16993
+          This test requires HTTPS to be already enabled via MEBx.
+          Complete initial MEBx configuration first.
+        success_msg: "✅ HTTPS confirmed working"
+
+    - name: Display current configuration
+      ansible.builtin.debug:
+        msg:
+          - "Current HTTPS Configuration:"
+          - "  IP Address: {{ https_status.ipv4_address }}"
+          - "  BIOS Version: {{ https_status.bios_version }}"
+          - "  Power State: {{ https_status.power_state }}"
+
+    # =========================================================================
+    # Phase 2: Generate new certificate for renewal test
+    # =========================================================================
+
+    - name: Generate new private key for renewal
+      community.crypto.openssl_privatekey:
+        path: "{{ cert_dir }}/renewal.key"
+        size: 2048
+        mode: '0600'
+
+    - name: Generate CSR for renewal certificate
+      community.crypto.openssl_csr:
+        path: "{{ cert_dir }}/renewal.csr"
+        privatekey_path: "{{ cert_dir }}/renewal.key"
+        common_name: "{{ test_amt_host }}"
+        organization_name: "Certificate Renewal Test"
+        subject_alt_name:
+          - "DNS:{{ test_amt_host }}"
+          - "IP:{{ https_status.ipv4_address }}"
+
+    - name: Generate new self-signed certificate
+      community.crypto.x509_certificate:
+        path: "{{ cert_dir }}/renewal.crt"
+        privatekey_path: "{{ cert_dir }}/renewal.key"
+        csr_path: "{{ cert_dir }}/renewal.csr"
+        provider: selfsigned
+        selfsigned_not_after: "+365d"
+        mode: '0644'
+
+    - name: Display renewal certificate info
+      community.crypto.x509_certificate_info:
+        path: "{{ cert_dir }}/renewal.crt"
+      register: renewal_cert_info
+
+    - name: Show renewal certificate details
+      ansible.builtin.debug:
+        msg:
+          - "✅ Renewal certificate generated"
+          - "Subject: {{ renewal_cert_info.subject }}"
+          - "Valid until: {{ renewal_cert_info.not_after }}"
+          - "Serial: {{ renewal_cert_info.serial_number }}"
+
+    # =========================================================================
+    # Phase 3: Attempt certificate update via HTTPS/WSMAN
+    # =========================================================================
+
+    - name: Attempt certificate update via HTTPS
+      parmstro.intel_amt.amt_tls_config:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16993                    # Connect via HTTPS
+        use_tls: true                  # Use TLS for connection
+        verify_ssl: false              # Self-signed cert
+        certificate_path: "{{ cert_dir }}/renewal.crt"
+        private_key_path: "{{ cert_dir }}/renewal.key"
+      register: renewal_result
+      ignore_errors: true
+
+    - name: Display renewal attempt result
+      ansible.builtin.debug:
+        var: renewal_result
+
+    # =========================================================================
+    # Phase 4: Analyze Results
+    # =========================================================================
+
+    - name: Determine if renewal via HTTPS is possible
+      ansible.builtin.set_fact:
+        https_renewal_works: "{{ renewal_result.certificate_uploaded | default(false) and not renewal_result.failed }}"
+
+    - name: Display test conclusion
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "CERTIFICATE RENEWAL TEST RESULTS"
+          - "=========================================="
+          - ""
+          - "Test System: {{ test_amt_host }}"
+          - "Connection Method: WSMAN over HTTPS (port 16993)"
+          - ""
+          - "{% if https_renewal_works %}✅ SUCCESS: Certificate renewal via HTTPS WORKS!{% else %}❌ FAILED: Certificate renewal via HTTPS does not work{% endif %}"
+          - ""
+          - "{% if https_renewal_works %}Implications:{% else %}Implications:{% endif %}"
+          - "{% if https_renewal_works %}  - Initial setup requires manual MEBx configuration{% endif %}"
+          - "{% if https_renewal_works %}  - After HTTPS enabled, certificates can be updated automatically!{% endif %}"
+          - "{% if https_renewal_works %}  - Certmonger + automated renewal workflow is viable{% endif %}"
+          - "{% if https_renewal_works %}  - Fleet of 42 NUCs can have automated certificate lifecycle{% endif %}"
+          - "{% if not https_renewal_works %}  - Initial setup requires manual MEBx configuration{% endif %}"
+          - "{% if not https_renewal_works %}  - Certificate renewals ALSO require manual MEBx{% endif %}"
+          - "{% if not https_renewal_works %}  - Need to explore alternative automation methods{% endif %}"
+          - "{% if not https_renewal_works %}  - Consider: AMT web interface, Intel tools, batch MEBx workflow{% endif %}"
+          - ""
+          - "Module Response:"
+          - "  {{ renewal_result.msg | default('No message') }}"
+          - ""
+          - "=========================================="
+
+    - name: Save test results
+      ansible.builtin.copy:
+        content: |
+          # AMT Certificate Renewal Test Results
+          # Generated: {{ ansible_date_time.iso8601 }}
+          # System: {{ test_amt_host }}
+
+          ## Test Configuration
+          - Test System: {{ test_amt_host }}
+          - IP Address: {{ https_status.ipv4_address }}
+          - Connection: WSMAN over HTTPS (port 16993)
+          - Method: Certificate update via amt_tls_config module
+
+          ## Results
+
+          {% if https_renewal_works %}
+          ### ✅ SUCCESS - Automated Renewal Possible
+
+          Certificate update via WSMAN over HTTPS **WORKS**!
+
+          **What This Means:**
+          1. Initial HTTPS enablement requires one-time manual MEBx configuration
+          2. After HTTPS is enabled, certificates can be updated automatically
+          3. Certmonger auto-renewal workflow is viable
+          4. Fleet management with automated certificate lifecycle is possible
+
+          **Recommended Workflow:**
+          1. Manual MEBx: Enable HTTPS with initial certificate (one-time per system)
+          2. Certmonger: Auto-request certificates from IPA
+          3. Ansible: Auto-update AMT certificates via HTTPS before expiration
+          4. Monitoring: Track certificate expiration dates
+
+          **For 42 NUC Fleet:**
+          - One-time manual effort: 42 systems × ~10 min = ~7 hours
+          - Ongoing: Fully automated with certmonger + Ansible
+          - Renewal playbook runs monthly via cron
+          - No manual intervention after initial setup
+
+          {% else %}
+          ### ❌ Certificate Renewal via HTTPS Does Not Work
+
+          Certificate update via WSMAN over HTTPS **FAILED**
+
+          **Error:** {{ renewal_result.msg | default('Unknown error') }}
+
+          **What This Means:**
+          1. Initial HTTPS setup requires manual MEBx
+          2. Certificate renewals ALSO require manual MEBx
+          3. WSMAN certificate management not supported on AMT 10.0.56
+
+          **Alternative Automation Options to Explore:**
+
+          1. **AMT Web Interface**
+             - Access: https://{{ test_amt_host }}:16993
+             - Check for REST API or automation capabilities
+             - Could use Selenium/Playwright for web automation
+
+          2. **Intel Manageability Tools**
+             - Intel Manageability Commander
+             - Intel Setup and Configuration Service (SCS)
+             - Check for CLI/automation modes
+
+          3. **Batch MEBx Workflow**
+             - Schedule maintenance windows
+             - Certmonger prepares all certificates
+             - Batch update via physical/KVM access
+             - Document/script the MEBx steps
+
+          4. **Certificate Lifetime Extension**
+             - Issue longer-lived certificates (2-3 years)
+             - Reduce renewal frequency
+             - Schedule renewals during planned maintenance
+
+          **For 42 NUC Fleet:**
+          - Manual effort per renewal cycle
+          - Consider quarterly batch updates
+          - Pre-stage all certificates via certmonger
+          - Streamline MEBx process as much as possible
+          {% endif %}
+
+          ## Module Output
+
+          ```
+          {{ renewal_result | to_nice_json }}
+          ```
+
+          ## Next Steps
+
+          {% if https_renewal_works %}
+          1. ✅ Configure remaining fleet via MEBx (one-time)
+          2. ✅ Set up certmonger for all systems
+          3. ✅ Create automated renewal playbook
+          4. ✅ Configure monitoring for certificate expiration
+          5. ✅ Test renewal workflow before first expiration
+          {% else %}
+          1. Test AMT web interface for certificate management
+          2. Investigate Intel SCS/Commander tools
+          3. Develop batch MEBx workflow if needed
+          4. Consider certificate lifetime vs. manual effort tradeoff
+          5. Document optimal renewal strategy
+          {% endif %}
+
+        dest: "{{ cert_dir }}/RENEWAL_TEST_RESULTS.md"
+        mode: '0644'
+
+    - name: Display results file location
+      ansible.builtin.debug:
+        msg: "📄 Detailed results saved to: {{ cert_dir }}/RENEWAL_TEST_RESULTS.md"
+
+    - name: Final recommendation
+      ansible.builtin.debug:
+        msg:
+          - ""
+          - "{% if https_renewal_works %}🎉 GOOD NEWS: Automated certificate renewal is possible!{% else %}⚠️  WARNING: Automated renewal may not be possible via WSMAN{% endif %}"
+          - "{% if https_renewal_works %}One-time MEBx setup enables ongoing automation.{% else %}Explore alternative automation methods or plan for batch manual updates.{% endif %}"
+          - ""
+          - "Next: Review {{ cert_dir }}/RENEWAL_TEST_RESULTS.md for detailed analysis"
+          - ""

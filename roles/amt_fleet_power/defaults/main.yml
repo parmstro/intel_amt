@@ -1,0 +1,34 @@
+---
+# Fleet power management defaults
+
+# Dictionary of AMT targets
+# Each key is a unique identifier, value is connection parameters
+amt_fleet_targets: {}
+#   c1s2n2:
+#     host: 192.168.254.209
+#     username: admin
+#     password: "{{ vault_amt_password }}"
+#     port: 16992
+#     use_tls: false
+#   c1s2n3:
+#     host: 192.168.254.210
+#     username: admin
+#     password: "{{ vault_amt_password }}"
+#     port: 16992
+#     use_tls: false
+
+# Power state to apply (on, off, reboot, cycle, query)
+amt_fleet_power_state: query
+
+# Continue on errors (don't fail entire fleet on single system failure)
+amt_fleet_continue_on_error: true
+
+# Parallel execution limit (how many systems to process concurrently)
+amt_fleet_parallel_limit: 10
+
+# Delay between operations (seconds) - useful for power sequencing
+amt_fleet_operation_delay: 0
+
+# Results aggregation
+amt_fleet_show_summary: true
+amt_fleet_show_failures: true

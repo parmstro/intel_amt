@@ -1,0 +1,72 @@
+---
+# Integration tests for amt_host_status module
+- name: Load encrypted credentials from vault directory
+  include_vars:
+    dir: ../../../../vault
+    ignore_unknown_extensions: true
+
+- name: Set test facts
+  set_fact:
+    test_host: "{{ amt_test_host | default('c1s2n2.amt.parmstrong.ca') }}"
+    test_user: "{{ amt_test_user | default('admin') }}"
+    test_pass: "{{ amt_test_password }}"
+    test_port: "{{ amt_test_port | default(16992) }}"
+    test_tls: "{{ amt_test_tls | default(false) }}"
+
+- name: Test 1 - Get system status
+  parmstro.intel_amt.amt_host_status:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "{{ test_pass }}"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+  register: status_result
+
+- name: Verify status retrieval succeeded
+  assert:
+    that:
+      - status_result is not failed
+      - status_result.changed == false
+      - status_result.msg is defined
+      - status_result.system_name is defined
+      - status_result.enabled_state is defined
+
+- name: Display system information
+  debug:
+    msg: |
+      System: {{ status_result.system_name }}
+      Enabled State: {{ status_result.enabled_state_text | default('N/A') }}
+      Operational Status: {{ status_result.operational_status }}
+      BIOS Version: {{ status_result.bios_version | default('N/A') }}
+      Firmware Version: {{ status_result.firmware_version | default('N/A') }}
+
+- name: Test 2 - Wrong credentials (should fail)
+  parmstro.intel_amt.amt_host_status:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "wrongpassword"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+  register: wrong_creds
+  ignore_errors: true
+
+- name: Verify wrong credentials failed
+  assert:
+    that:
+      - wrong_creds is failed
+
+- name: Test 3 - Verify idempotency
+  parmstro.intel_amt.amt_host_status:
+    host: "{{ test_host }}"
+    username: "{{ test_user }}"
+    password: "{{ test_pass }}"
+    port: "{{ test_port }}"
+    use_tls: "{{ test_tls }}"
+  register: second_status
+
+- name: Verify results are consistent
+  assert:
+    that:
+      - second_status.system_name == status_result.system_name
+      - second_status.enabled_state == status_result.enabled_state
+      - second_status.changed == false

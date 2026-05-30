@@ -1,0 +1,55 @@
+---
+# Fleet management with LIST model (not dictionary)
+
+- name: AMT Fleet Management - List Model
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Fleet as a LIST of systems
+    amt_fleet:
+      - name: c1s2n2
+        host: 192.168.254.209
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+
+      - name: c1s2n3
+        host: 192.168.254.210
+        username: admin
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Query fleet status (list model)
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ item.host }}"
+        username: "{{ item.username }}"
+        password: "{{ item.password }}"
+        port: "{{ item.port }}"
+        use_tls: "{{ item.use_tls }}"
+      loop: "{{ amt_fleet }}"
+      loop_control:
+        label: "{{ item.name }}"
+      register: fleet_status_results
+
+    - name: Display results
+      ansible.builtin.debug:
+        msg:
+          - "System: {{ item.item.name }}"
+          - "  Power: {{ item.power_state }}"
+          - "  AMT Version: {{ item.amt_version }}"
+      loop: "{{ fleet_status_results.results }}"
+      loop_control:
+        label: "{{ item.item.name }}"

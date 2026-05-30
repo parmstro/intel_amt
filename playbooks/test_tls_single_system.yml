@@ -1,0 +1,390 @@
+---
+# Quick test of TLS configuration on a single AMT system
+# Perfect for testing with physical access available
+#
+# Usage:
+#   ansible-playbook playbooks/test_tls_single_system.yml \
+#     --vault-password-file .vault_password \
+#     -e test_amt_host=c1s2n2.amt.parmstrong.ca
+
+- name: Test TLS Configuration on Single AMT System
+  hosts: localhost
+  gather_facts: true
+  vars:
+    # Override with -e test_amt_host=hostname
+    test_amt_host: "{{ test_amt_host | default('c1s2n2.amt.parmstrong.ca') }}"
+    test_nickname: "amt-test-{{ ansible_date_time.epoch }}"
+    cert_dir: /tmp/amt_test_certs
+
+    # Choose test method: 'ipa' or 'selfsigned'
+    test_method: "{{ cert_method | default('selfsigned') }}"
+
+  tasks:
+    # =========================================================================
+    # Phase 1: Pre-Test Validation
+    # =========================================================================
+
+    - name: Display test configuration
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "AMT TLS Configuration Test"
+          - "=========================================="
+          - "Test System: {{ test_amt_host }}"
+          - "Certificate Method: {{ test_method }}"
+          - "Certificate Directory: {{ cert_dir }}"
+          - "Timestamp: {{ ansible_date_time.iso8601 }}"
+          - "=========================================="
+
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Create temporary certificate directory
+      ansible.builtin.file:
+        path: "{{ cert_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Check initial HTTP connectivity
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      register: initial_status
+
+    - name: Debug what was returned
+      ansible.builtin.debug:
+        var: initial_status
+
+    - name: Display current AMT configuration
+      ansible.builtin.debug:
+        msg:
+          - "✅ AMT System Accessible"
+          - "AMT Version: {{ initial_status.amt_version | default('Unknown') }}"
+          - "BIOS Version: {{ initial_status.bios_version | default('Unknown') }}"
+          - "IP Address: {{ initial_status.ipv4_address | default('Unknown') }}"
+          - "MAC Address: {{ initial_status.mac_address | default('Unknown') }}"
+          - "Current Access: HTTP port 16992"
+
+    # =========================================================================
+    # Phase 2A: IPA Certificate Method (if selected)
+    # =========================================================================
+
+    - name: IPA Certificate Workflow
+      when: test_method == 'ipa'
+      block:
+        - name: Verify IPA client tools available
+          ansible.builtin.command:
+            cmd: ipa-getcert --version
+          register: ipa_check
+          changed_when: false
+
+        - name: Display IPA version
+          ansible.builtin.debug:
+            msg: "Using IPA certmonger: {{ ipa_check.stdout }}"
+
+        - name: Request certificate from IPA and configure HTTPS
+          parmstro.intel_amt.amt_tls_config:
+            host: "{{ test_amt_host }}"
+            username: "{{ amt_username }}"
+            password: "{{ amt_password }}"
+            port: 16992
+            use_tls: false
+            tls_enabled: true
+            certmonger_request: true
+            certmonger_nickname: "{{ test_nickname }}"
+            certmonger_subject: "CN={{ test_amt_host }}"
+            certmonger_principal: "host/{{ test_amt_host }}@PARMSTRONG.CA"
+            certificate_path: "{{ cert_dir }}/{{ test_nickname }}.crt"
+            private_key_path: "{{ cert_dir }}/{{ test_nickname }}.key"
+          register: ipa_result
+
+        - name: Display IPA result
+          ansible.builtin.debug:
+            var: ipa_result
+
+    # =========================================================================
+    # Phase 2B: Self-Signed Certificate Method (if selected)
+    # =========================================================================
+
+    - name: Self-Signed Certificate Workflow
+      when: test_method == 'selfsigned'
+      block:
+        - name: Check if community.crypto is available
+          ansible.builtin.command:
+            cmd: ansible-galaxy collection list community.crypto
+          register: crypto_check
+          changed_when: false
+          failed_when: false
+
+        - name: Install community.crypto if needed
+          ansible.builtin.command:
+            cmd: ansible-galaxy collection install community.crypto
+          when: crypto_check.rc != 0
+
+        - name: Generate private key
+          community.crypto.openssl_privatekey:
+            path: "{{ cert_dir }}/{{ test_nickname }}.key"
+            size: 2048
+            mode: '0600'
+
+        - name: Generate CSR
+          community.crypto.openssl_csr:
+            path: "{{ cert_dir }}/{{ test_nickname }}.csr"
+            privatekey_path: "{{ cert_dir }}/{{ test_nickname }}.key"
+            common_name: "{{ test_amt_host }}"
+            organization_name: "Test Lab"
+            subject_alt_name:
+              - "DNS:{{ test_amt_host }}"
+              - "IP:{{ initial_status.ipv4_address }}"
+
+        - name: Generate self-signed certificate
+          community.crypto.x509_certificate:
+            path: "{{ cert_dir }}/{{ test_nickname }}.crt"
+            privatekey_path: "{{ cert_dir }}/{{ test_nickname }}.key"
+            csr_path: "{{ cert_dir }}/{{ test_nickname }}.csr"
+            provider: selfsigned
+            selfsigned_not_after: "+365d"
+            mode: '0644'
+
+        - name: Display certificate info
+          community.crypto.x509_certificate_info:
+            path: "{{ cert_dir }}/{{ test_nickname }}.crt"
+          register: cert_info
+
+        - name: Show certificate details
+          ansible.builtin.debug:
+            msg:
+              - "✅ Self-signed certificate generated"
+              - "Subject: {{ cert_info.subject }}"
+              - "Valid until: {{ cert_info.not_after }}"
+              - "Certificate: {{ cert_dir }}/{{ test_nickname }}.crt"
+              - "Private Key: {{ cert_dir }}/{{ test_nickname }}.key"
+
+        - name: Upload certificate and enable HTTPS
+          parmstro.intel_amt.amt_tls_config:
+            host: "{{ test_amt_host }}"
+            username: "{{ amt_username }}"
+            password: "{{ amt_password }}"
+            port: 16992
+            use_tls: false
+            tls_enabled: true
+            certificate_path: "{{ cert_dir }}/{{ test_nickname }}.crt"
+            private_key_path: "{{ cert_dir }}/{{ test_nickname }}.key"
+          register: selfsigned_result
+
+        - name: Display upload result
+          ansible.builtin.debug:
+            var: selfsigned_result
+
+    # =========================================================================
+    # Phase 3: Test HTTPS Connectivity
+    # =========================================================================
+
+    - name: Wait for AMT to process configuration
+      ansible.builtin.pause:
+        seconds: 10
+        prompt: "Waiting for AMT to apply TLS settings..."
+
+    - name: Test HTTPS connectivity (first attempt)
+      parmstro.intel_amt.amt_host_status:
+        host: "{{ test_amt_host }}"
+        username: "{{ amt_username }}"
+        password: "{{ amt_password }}"
+        port: 16993
+        use_tls: true
+        verify_ssl: false
+      register: https_test
+      ignore_errors: true
+
+    - name: Display HTTPS test result
+      ansible.builtin.debug:
+        msg: "{{ 'HTTPS Working! ✅' if not https_test.failed else 'HTTPS Not Available - Manual Configuration Required ⚠️' }}"
+
+    # =========================================================================
+    # Phase 4: Manual Configuration Instructions (if needed)
+    # =========================================================================
+
+    - name: Generate manual configuration instructions
+      when: https_test.failed or (ipa_result.warnings is defined) or (selfsigned_result.warnings is defined)
+      block:
+        - name: Save certificate to easily accessible file
+          ansible.builtin.copy:
+            src: "{{ cert_dir }}/{{ test_nickname }}.crt"
+            dest: "{{ cert_dir }}/certificate_for_mebx.txt"
+            mode: '0644'
+
+        - name: Save private key to easily accessible file
+          ansible.builtin.copy:
+            src: "{{ cert_dir }}/{{ test_nickname }}.key"
+            dest: "{{ cert_dir }}/privatekey_for_mebx.txt"
+            mode: '0600'
+
+        - name: Display manual configuration instructions
+          ansible.builtin.debug:
+            msg:
+              - "=========================================="
+              - "MANUAL CONFIGURATION REQUIRED"
+              - "=========================================="
+              - ""
+              - "AMT 10.0.56 requires manual certificate configuration via Intel MEBx."
+              - ""
+              - "STEPS:"
+              - "------"
+              - "1. Physically access the test system"
+              - "2. Reboot the system"
+              - "3. During boot, press Ctrl+P to enter Intel MEBx"
+              - "4. Enter AMT admin password: {{ amt_password }}"
+              - "5. Navigate to: Remote Setup and Configuration → TLS PKI"
+              - "6. Select: Import Certificate"
+              - ""
+              - "CERTIFICATE FILES:"
+              - "----------------"
+              - "Certificate: {{ cert_dir }}/certificate_for_mebx.txt"
+              - "Private Key: {{ cert_dir }}/privatekey_for_mebx.txt"
+              - ""
+              - "VIEW CERTIFICATE CONTENTS:"
+              - "-------------------------"
+              - "cat {{ cert_dir }}/certificate_for_mebx.txt"
+              - ""
+              - "VIEW PRIVATE KEY CONTENTS:"
+              - "-------------------------"
+              - "cat {{ cert_dir }}/privatekey_for_mebx.txt"
+              - ""
+              - "COPY/PASTE:"
+              - "----------"
+              - "In MEBx, you'll need to copy/paste the contents of both files."
+              - "The certificate starts with: -----BEGIN CERTIFICATE-----"
+              - "The private key starts with: -----BEGIN PRIVATE KEY-----"
+              - ""
+              - "AFTER IMPORT:"
+              - "------------"
+              - "7. Save and exit MEBx"
+              - "8. System will reboot"
+              - "9. Run verification playbook to test HTTPS"
+              - ""
+              - "=========================================="
+
+        - name: Create manual config reference file
+          ansible.builtin.copy:
+            content: |
+              # AMT TLS Manual Configuration Reference
+              # Generated: {{ ansible_date_time.iso8601 }}
+              # System: {{ test_amt_host }}
+
+              ## Quick Reference
+
+              **System Details:**
+              - Hostname: {{ test_amt_host }}
+              - IP Address: {{ initial_status.ipv4_address }}
+              - Power State: {{ initial_status.power_state }}
+              - AMT Admin User: {{ amt_username }}
+              - AMT Admin Password: {{ amt_password }}
+
+              **Certificate Files:**
+              - Certificate: {{ cert_dir }}/certificate_for_mebx.txt
+              - Private Key: {{ cert_dir }}/privatekey_for_mebx.txt
+
+              ## MEBx Configuration Steps
+
+              1. **Access MEBx**
+                 - Reboot system
+                 - Press Ctrl+P during boot
+                 - Enter password: {{ amt_password }}
+
+              2. **Navigate to TLS PKI**
+                 - Remote Setup and Configuration
+                 - TLS PKI
+                 - Import Certificate
+
+              3. **Import Certificate**
+                 - Copy contents of: {{ cert_dir }}/certificate_for_mebx.txt
+                 - Paste into MEBx certificate field
+                 - Include BEGIN and END markers
+
+              4. **Import Private Key**
+                 - Copy contents of: {{ cert_dir }}/privatekey_for_mebx.txt
+                 - Paste into MEBx private key field
+                 - Include BEGIN and END markers
+
+              5. **Save and Exit**
+                 - Save configuration
+                 - Exit MEBx
+                 - System will reboot
+
+              ## Verification
+
+              After configuration, test HTTPS:
+
+              ```bash
+              ansible-playbook playbooks/verify_tls.yml \
+                -e test_amt_host={{ test_amt_host }}
+              ```
+
+              Or manually:
+
+              ```bash
+              curl -k https://{{ test_amt_host }}:16993
+              ```
+
+              ## View Certificate Contents
+
+              ```bash
+              # Certificate
+              cat {{ cert_dir }}/certificate_for_mebx.txt
+
+              # Private Key
+              cat {{ cert_dir }}/privatekey_for_mebx.txt
+              ```
+
+            dest: "{{ cert_dir }}/MANUAL_CONFIG_INSTRUCTIONS.md"
+            mode: '0644'
+
+        - name: Display instruction file location
+          ansible.builtin.debug:
+            msg: "📄 Instructions saved to: {{ cert_dir }}/MANUAL_CONFIG_INSTRUCTIONS.md"
+
+    # =========================================================================
+    # Phase 5: Final Summary
+    # =========================================================================
+
+    - name: Generate test summary
+      ansible.builtin.set_fact:
+        test_summary:
+          test_system: "{{ test_amt_host }}"
+          test_method: "{{ test_method }}"
+          amt_version: "{{ initial_status.amt_version }}"
+          http_working: true
+          https_working: "{{ not https_test.failed }}"
+          manual_config_needed: "{{ https_test.failed }}"
+          cert_directory: "{{ cert_dir }}"
+          timestamp: "{{ ansible_date_time.iso8601 }}"
+
+    - name: Display final summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "TLS CONFIGURATION TEST SUMMARY"
+          - "=========================================="
+          - "System: {{ test_summary.test_system }}"
+          - "Method: {{ test_summary.test_method }}"
+          - "AMT Version: {{ test_summary.amt_version }}"
+          - ""
+          - "Results:"
+          - "  HTTP (16992): {{ '✅ Working' if test_summary.http_working else '❌ Failed' }}"
+          - "  HTTPS (16993): {{ '✅ Working' if test_summary.https_working else '⚠️ Manual Config Needed' }}"
+          - ""
+          - "{% if test_summary.manual_config_needed %}Next Step: Manual MEBx Configuration Required{% else %}Success! HTTPS is now enabled{% endif %}"
+          - ""
+          - "Certificate Location: {{ test_summary.cert_directory }}"
+          - "Instructions: {{ test_summary.cert_directory }}/MANUAL_CONFIG_INSTRUCTIONS.md"
+          - ""
+          - "=========================================="

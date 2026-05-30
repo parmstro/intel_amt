@@ -1,0 +1,168 @@
+---
+# Test the 3 new modules on online systems
+# Systems: c1s2n2 (192.168.254.209) and c1s2n3 (192.168.254.200)
+
+- name: Test New AMT Modules
+  hosts: localhost
+  gather_facts: false
+  vars:
+    test_systems:
+      - hostname: c1s2n2.amt.parmstrong.ca
+        ip: 192.168.254.209
+        chassis: 1
+        stack: 2
+        node: 2
+      - hostname: c1s2n3.amt.parmstrong.ca
+        ip: 192.168.254.200
+        chassis: 1
+        stack: 2
+        node: 3
+
+  tasks:
+    - name: Load credentials
+      ansible.builtin.include_vars:
+        dir: ../vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Display test plan
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "Testing New AMT Modules"
+          - "=========================================="
+          - "Systems under test:"
+          - "  - c1s2n2 (Chassis 1, Stack 2, Node 2)"
+          - "  - c1s2n3 (Chassis 1, Stack 2, Node 3)"
+          - ""
+          - "Modules to test:"
+          - "  1. amt_power_policy"
+          - "  2. amt_system_settings"
+          - "  3. amt_user"
+          - "=========================================="
+
+    # =========================================================================
+    # Test 1: Power Policy Module
+    # =========================================================================
+
+    - name: Test amt_power_policy (query mode)
+      parmstro.intel_amt.amt_power_policy:
+        host: "{{ item.ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ test_systems }}"
+      register: power_policy_results
+      ignore_errors: true
+
+    - name: Display power policy results
+      ansible.builtin.debug:
+        msg:
+          - "Power Policy Results for {{ item.item.hostname }}:"
+          - "  Wake on LAN: {{ item.wake_on_lan | default('Unknown') }}"
+          - "  Idle Timeout: {{ item.idle_timeout | default('Unknown') }}"
+          - "  Status: {{ 'Success' if not item.failed else 'Failed' }}"
+          - "  Message: {{ item.msg | default('N/A') }}"
+      loop: "{{ power_policy_results.results }}"
+      loop_control:
+        label: "{{ item.item.hostname }}"
+
+    # =========================================================================
+    # Test 2: System Settings Module
+    # =========================================================================
+
+    - name: Test amt_system_settings (query mode)
+      parmstro.intel_amt.amt_system_settings:
+        host: "{{ item.ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+      loop: "{{ test_systems }}"
+      register: system_settings_results
+      ignore_errors: true
+
+    - name: Display system settings results
+      ansible.builtin.debug:
+        msg:
+          - "System Settings Results for {{ item.item.hostname }}:"
+          - "  System Name: {{ item.system_name | default('Unknown') }}"
+          - "  Domain: {{ item.domain_name | default('Unknown') }}"
+          - "  FQDN: {{ item.fqdn | default('Unknown') }}"
+          - "  Status: {{ 'Success' if not item.failed else 'Failed' }}"
+          - "  Message: {{ item.msg | default('N/A') }}"
+      loop: "{{ system_settings_results.results }}"
+      loop_control:
+        label: "{{ item.item.hostname }}"
+
+    # =========================================================================
+    # Test 3: User Module (check mode only - don't change passwords!)
+    # =========================================================================
+
+    - name: Test amt_user (check mode only)
+      parmstro.intel_amt.amt_user:
+        host: "{{ item.ip }}"
+        username: "{{ amt_test_user }}"
+        password: "{{ amt_test_password }}"
+        port: 16992
+        use_tls: false
+        target_user: admin
+        state: present
+      loop: "{{ test_systems }}"
+      register: user_results
+      check_mode: true
+      ignore_errors: true
+
+    - name: Display user management results
+      ansible.builtin.debug:
+        msg:
+          - "User Management Results for {{ item.item.hostname }}:"
+          - "  Target User: {{ item.target_user | default('Unknown') }}"
+          - "  State: {{ item.state | default('Unknown') }}"
+          - "  Status: {{ 'Success' if not item.failed else 'Failed' }}"
+          - "  Message: {{ item.msg | default('N/A') }}"
+      loop: "{{ user_results.results }}"
+      loop_control:
+        label: "{{ item.item.hostname }}"
+
+    # =========================================================================
+    # Summary
+    # =========================================================================
+
+    - name: Generate test summary
+      ansible.builtin.set_fact:
+        test_summary:
+          power_policy_tested: "{{ power_policy_results.results | length }}"
+          power_policy_success: "{{ power_policy_results.results | rejectattr('failed', 'defined') | list | length }}"
+          system_settings_tested: "{{ system_settings_results.results | length }}"
+          system_settings_success: "{{ system_settings_results.results | rejectattr('failed', 'defined') | list | length }}"
+          user_tested: "{{ user_results.results | length }}"
+          user_success: "{{ user_results.results | rejectattr('failed', 'defined') | list | length }}"
+
+    - name: Display final summary
+      ansible.builtin.debug:
+        msg:
+          - "=========================================="
+          - "TEST SUMMARY"
+          - "=========================================="
+          - ""
+          - "amt_power_policy:"
+          - "  Tested: {{ test_summary.power_policy_tested }} systems"
+          - "  Success: {{ test_summary.power_policy_success }}"
+          - ""
+          - "amt_system_settings:"
+          - "  Tested: {{ test_summary.system_settings_tested }} systems"
+          - "  Success: {{ test_summary.system_settings_success }}"
+          - ""
+          - "amt_user:"
+          - "  Tested: {{ test_summary.user_tested }} systems"
+          - "  Success: {{ test_summary.user_success }}"
+          - ""
+          - "=========================================="
+          - "Note: Modules are placeholders pending AMT capability testing"
+          - "Full WSMAN implementation requires exploring AMT 10.0.56 resources"
+          - "=========================================="

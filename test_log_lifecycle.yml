@@ -1,0 +1,106 @@
+---
+# Full lifecycle test: clear log → verify empty → generate event → verify event
+#
+# Run with environment variables:
+#   export AMT_TEST_HOST="c1s2n2.amt.parmstrong.ca"
+#   export AMT_TEST_PASSWORD="your_password"
+#   ansible-playbook test_log_lifecycle.yml
+#
+# OR with vault:
+#   ansible-playbook test_log_lifecycle.yml --vault-password-file=.vault_password
+#
+- name: Test AMT Event Log Lifecycle
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    # Try environment variables first (for CI/CD and local dev)
+    test_host: "{{ lookup('env', 'AMT_TEST_HOST') | default('c1s2n2.amt.parmstrong.ca') }}"
+    test_user: "{{ lookup('env', 'AMT_TEST_USER') | default('admin') }}"
+    test_port: "{{ lookup('env', 'AMT_TEST_PORT') | default('16992') | int }}"
+    test_tls: "{{ lookup('env', 'AMT_TEST_TLS') | default('false') | bool }}"
+
+  tasks:
+    - name: Load vaulted credentials
+      ansible.builtin.include_vars:
+        dir: vault
+        ignore_unknown_extensions: true
+        extensions:
+          - yml
+          - yaml
+      no_log: true
+
+    - name: Step 1 - Clear the AMT log
+      parmstro.intel_amt.amt_log_clear:
+        host: "{{ test_host }}"
+        username: "{{ test_user }}"
+        password: "{{ lookup('env', 'AMT_TEST_PASSWORD') | default(amt_test_password) }}"
+        port: "{{ test_port }}"
+        use_tls: "{{ test_tls }}"
+        log_type: message
+      register: clear_result
+
+    - name: Display clear result
+      ansible.builtin.debug:
+        var: clear_result
+
+    - name: Step 2 - Verify log is empty
+      parmstro.intel_amt.amt_event_log:
+        host: "{{ test_host }}"
+        username: "{{ test_user }}"
+        password: "{{ lookup('env', 'AMT_TEST_PASSWORD') | default(amt_test_password) }}"
+        port: "{{ test_port }}"
+        use_tls: "{{ test_tls }}"
+        max_records: 10
+      register: empty_log
+
+    - name: Verify log is empty
+      ansible.builtin.assert:
+        that:
+          - empty_log.event_count == 0
+        success_msg: "Log is empty as expected"
+        fail_msg: "Log should be empty after clear"
+
+    - name: Step 3 - Generate event by rebooting
+      parmstro.intel_amt.amt_power:
+        host: "{{ test_host }}"
+        username: "{{ test_user }}"
+        password: "{{ lookup('env', 'AMT_TEST_PASSWORD') | default(amt_test_password) }}"
+        port: "{{ test_port }}"
+        use_tls: "{{ test_tls }}"
+        state: reboot
+      register: reboot_result
+
+    - name: Display reboot result
+      ansible.builtin.debug:
+        var: reboot_result
+
+    - name: Wait for system to start rebooting
+      ansible.builtin.pause:
+        seconds: 10
+        prompt: "Waiting 10 seconds for reboot to begin..."
+
+    - name: Step 4 - Check for events in log
+      parmstro.intel_amt.amt_event_log:
+        host: "{{ test_host }}"
+        username: "{{ test_user }}"
+        password: "{{ lookup('env', 'AMT_TEST_PASSWORD') | default(amt_test_password) }}"
+        port: "{{ test_port }}"
+        use_tls: "{{ test_tls }}"
+        max_records: 20
+      register: populated_log
+      retries: 3
+      delay: 5
+
+    - name: Display log after reboot
+      ansible.builtin.debug:
+        var: populated_log
+
+    - name: Summary
+      ansible.builtin.debug:
+        msg: |
+          Lifecycle Test Complete:
+          - Log cleared: {{ clear_result.changed }}
+          - Empty log verified: {{ empty_log.event_count }} events
+          - Reboot triggered: {{ reboot_result.changed }}
+          - Events after reboot: {{ populated_log.event_count }} events
